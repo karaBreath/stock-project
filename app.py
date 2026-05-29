@@ -32,5 +32,6 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    print(f"\n  Stock Analysis App running at http://{Config.HOST}:{Config.PORT}\n")
-    app.run(host=Config.HOST, port=Config.PORT, debug=Config.DEBUG)
+    port = int(__import__("os").environ.get("PORT", 5000))
+    print(f"\n  Stock Analysis App running at http://0.0.0.0:{port}\n")
+    app.run(host="0.0.0.0", port=port, debug=Config.DEBUG)
