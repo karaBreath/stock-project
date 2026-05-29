@@ -182,46 +182,68 @@ routes.dashboard = async (app) => {
 // ============================================================
 routes.screener = (app) => {
   app.innerHTML = `
-    <div class="view active">
-      <div class="page-title">Stock Screener</div>
-      <div class="page-sub">คัดกรองหุ้นตามเกณฑ์พื้นฐาน P/E, ROE, หนี้สิน, ปันผล</div>
-      <div class="card" style="margin-bottom:16px">
-        <div class="chips">
-          <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">หุ้นไทย</span>
-          <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">หุ้นสหรัฐ</span>
+    <div class=”view active”>
+      <div class=”page-title”>Stock Screener</div>
+      <div class=”page-sub”>สแกนหุ้นไทย 300+ ตัว / US 500+ ตัว ครอบคลุมทุกกลุ่มอุตสาหกรรม</div>
+      <div class=”card” style=”margin-bottom:16px”>
+        <div class=”chips” style=”margin-bottom:14px”>
+          <span class=”chip ${currentMarket==='th'?'active':''}” data-mkt=”th”>หุ้นไทย (SET) 300+</span>
+          <span class=”chip ${currentMarket==='us'?'active':''}” data-mkt=”us”>หุ้นสหรัฐ 500+</span>
         </div>
-        <div class="form-grid">
-          <div><label>P/E สูงสุด</label><input id="pe_max" type="number" placeholder="เช่น 20"></div>
-          <div><label>ROE ต่ำสุด (%)</label><input id="roe_min" type="number" placeholder="เช่น 15"></div>
-          <div><label>D/E สูงสุด</label><input id="de_max" type="number" placeholder="เช่น 1.5"></div>
-          <div><label>ปันผลต่ำสุด (%)</label><input id="dy_min" type="number" placeholder="เช่น 3"></div>
-          <div><button class="btn" id="runScreen">คัดกรอง</button></div>
+        <div class=”form-grid”>
+          <div><label>P/E สูงสุด</label><input id=”pe_max” type=”number” placeholder=”เช่น 20”></div>
+          <div><label>P/E ต่ำสุด</label><input id=”pe_min” type=”number” placeholder=”เช่น 0”></div>
+          <div><label>ROE ต่ำสุด (%)</label><input id=”roe_min” type=”number” placeholder=”เช่น 10”></div>
+          <div><label>D/E สูงสุด</label><input id=”de_max” type=”number” placeholder=”เช่น 1.5”></div>
+          <div><label>ปันผลต่ำสุด (%)</label><input id=”dy_min” type=”number” placeholder=”เช่น 3”></div>
+          <div><label>Market Cap ต่ำสุด (B)</label><input id=”mcap_min_b” type=”number” placeholder=”เช่น 1”></div>
+          <div><button class=”btn” id=”runScreen”>สแกนทั้งตลาด</button></div>
         </div>
       </div>
-      <div class="card"><div id="screenResults">${emptyState('📋','ตั้งเกณฑ์แล้วกด “คัดกรอง”')}</div></div>
+      <div class=”card”><div id=”screenResults”>${emptyState('🔎','กด “สแกนทั้งตลาด” เพื่อค้นหาหุ้นนอกสายตา')}</div></div>
     </div>`;
-  $$('.chip[data-mkt]').forEach(c => c.onclick = () => { currentMarket = c.dataset.mkt; $$('.chip[data-mkt]').forEach(x=>x.classList.toggle('active', x===c)); });
+
+  $$('.chip[data-mkt]').forEach(c => c.onclick = () => {
+    currentMarket = c.dataset.mkt;
+    $$('.chip[data-mkt]').forEach(x => x.classList.toggle('active', x === c));
+  });
   $('#runScreen').onclick = run;
-  run();
 
   async function run() {
-    $('#screenResults').innerHTML = loader('กำลังสแกนหุ้น…');
+    const mktLabel = currentMarket === 'th' ? 'หุ้นไทย 300+ ตัว' : 'หุ้นสหรัฐ 500+ ตัว';
+    $('#screenResults').innerHTML = loader(`กำลังสแกน ${mktLabel} (อาจใช้เวลา 20-40 วินาที)…`);
     const body = { market: currentMarket };
-    ['pe_max','roe_min','de_max','dy_min'].forEach(k => { const v = $('#'+k).value; if (v !== '') body[k] = v; });
+    ['pe_max','pe_min','roe_min','de_max','dy_min'].forEach(k => {
+      const v = $('#' + k)?.value; if (v) body[k] = v;
+    });
+    const mcapB = $('#mcap_min_b')?.value;
+    if (mcapB) body.mcap_min = parseFloat(mcapB) * 1e9;
+
     const r = await api('/screener', { method: 'POST', body });
-    if (!r.results || !r.results.length) { $('#screenResults').innerHTML = emptyState('🔍', 'ไม่พบหุ้นที่เข้าเกณฑ์ ลองผ่อนเงื่อนไข'); return; }
-    $('#screenResults').innerHTML = `<div class="muted small" style="margin-bottom:10px">พบ ${r.count} หุ้น</div>
-      <div class="table-scroll"><table class="tbl"><thead><tr>
-        <th>หุ้น</th><th>ราคา</th><th>%วันนี้</th><th>P/E</th><th>ROE</th><th>D/E</th><th>ปันผล</th><th>มูลค่าตลาด</th></tr></thead>
-        <tbody>${r.results.map(s => `<tr data-t="${s.ticker}">
-          <td><b class="mono">${s.ticker}</b><div class="muted small">${(s.name||'').slice(0,22)}</div></td>
-          <td>${nf(s.price)}</td>
-          <td class="${cls(s.change_pct)}">${pf(s.change_pct)}</td>
-          <td>${nf(s.pe,1)}</td>
-          <td>${nf(asPct(s.roe),1)}%</td>
-          <td>${nf(asDE(s.debt_to_equity),2)}</td>
-          <td>${nf(asPct(s.dividend_yield),2)}%</td>
-          <td>${bigNum(s.market_cap)}</td></tr>`).join('')}</tbody></table></div>`;
+    const scanned = r.scanned || '?';
+    if (!r.results?.length) {
+      $('#screenResults').innerHTML = emptyState('🔍', `สแกน ${scanned} ตัวแล้ว ไม่พบหุ้นที่เข้าเกณฑ์ — ลองผ่อนเงื่อนไข`);
+      return;
+    }
+    $('#screenResults').innerHTML = `
+      <div class=”muted small” style=”margin-bottom:10px”>
+        สแกนแล้ว <b>${scanned}</b> ตัว · พบ <b class=”up”>${r.count}</b> หุ้นที่เข้าเกณฑ์
+      </div>
+      <div class=”table-scroll”><table class=”tbl”><thead><tr>
+        <th>หุ้น</th><th>กลุ่ม</th><th>ราคา</th><th>%วันนี้</th>
+        <th>P/E</th><th>ROE</th><th>D/E</th><th>ปันผล</th><th>มูลค่าตลาด</th>
+      </tr></thead>
+      <tbody>${r.results.map(s => `<tr data-t=”${s.ticker}”>
+        <td><b class=”mono”>${s.ticker}</b><div class=”muted small”>${(s.name||'').slice(0,22)}</div></td>
+        <td><span class=”muted small”>${(s.sector||'—').slice(0,18)}</span></td>
+        <td>${nf(s.price)}</td>
+        <td class=”${cls(s.change_pct)}”>${pf(s.change_pct)}</td>
+        <td>${nf(s.pe,1)}</td>
+        <td>${nf(asPct(s.roe),1)}%</td>
+        <td>${nf(asDE(s.debt_to_equity),2)}</td>
+        <td>${nf(asPct(s.dividend_yield),2)}%</td>
+        <td>${bigNum(s.market_cap)}</td>
+      </tr>`).join('')}</tbody></table></div>`;
     $$('#screenResults tr[data-t]').forEach(tr => tr.onclick = () => go('analyze', tr.dataset.t));
   }
 };
