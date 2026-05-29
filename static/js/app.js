@@ -164,7 +164,7 @@ routes.dashboard = async (app) => {
   async function loadWatch() {
     const w = await api('/watchlist');
     const tickers = (w.watchlist||[]).map(x => x.ticker);
-    if (!tickers.length) { $('#watchBox').innerHTML = emptyState('⭐', 'ยังไม่มีหุ้นในรายการเฝ้าดู — กด “เพิ่ม”'); return; }
+    if (!tickers.length) { $('#watchBox').innerHTML = emptyState('⭐', 'ยังไม่มีหุ้นในรายการเฝ้าดู — กด "เพิ่ม"'); return; }
     const { quotes } = await api('/quotes', { method: 'POST', body: { tickers } });
     $('#watchBox').innerHTML = `<div class="grid cols-4">${quotes.map(q => `
       <div class="card ticker-card" data-t="${q.ticker}">
@@ -182,25 +182,25 @@ routes.dashboard = async (app) => {
 // ============================================================
 routes.screener = (app) => {
   app.innerHTML = `
-    <div class=”view active”>
-      <div class=”page-title”>Stock Screener</div>
-      <div class=”page-sub”>สแกนหุ้นไทย 300+ ตัว / US 500+ ตัว ครอบคลุมทุกกลุ่มอุตสาหกรรม</div>
-      <div class=”card” style=”margin-bottom:16px”>
-        <div class=”chips” style=”margin-bottom:14px”>
-          <span class=”chip ${currentMarket==='th'?'active':''}” data-mkt=”th”>หุ้นไทย (SET) 300+</span>
-          <span class=”chip ${currentMarket==='us'?'active':''}” data-mkt=”us”>หุ้นสหรัฐ 500+</span>
+    <div class="view active">
+      <div class="page-title">Stock Screener</div>
+      <div class="page-sub">สแกนหุ้นไทย 300+ ตัว / US 500+ ตัว ครอบคลุมทุกกลุ่มอุตสาหกรรม</div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="chips" style="margin-bottom:14px">
+          <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">หุ้นไทย (SET) 300+</span>
+          <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">หุ้นสหรัฐ 500+</span>
         </div>
-        <div class=”form-grid”>
-          <div><label>P/E สูงสุด</label><input id=”pe_max” type=”number” placeholder=”เช่น 20”></div>
-          <div><label>P/E ต่ำสุด</label><input id=”pe_min” type=”number” placeholder=”เช่น 0”></div>
-          <div><label>ROE ต่ำสุด (%)</label><input id=”roe_min” type=”number” placeholder=”เช่น 10”></div>
-          <div><label>D/E สูงสุด</label><input id=”de_max” type=”number” placeholder=”เช่น 1.5”></div>
-          <div><label>ปันผลต่ำสุด (%)</label><input id=”dy_min” type=”number” placeholder=”เช่น 3”></div>
-          <div><label>Market Cap ต่ำสุด (B)</label><input id=”mcap_min_b” type=”number” placeholder=”เช่น 1”></div>
-          <div><button class=”btn” id=”runScreen”>สแกนทั้งตลาด</button></div>
+        <div class="form-grid">
+          <div><label>P/E สูงสุด</label><input id="pe_max" type="number" placeholder="เช่น 20"></div>
+          <div><label>P/E ต่ำสุด</label><input id="pe_min" type="number" placeholder="เช่น 0"></div>
+          <div><label>ROE ต่ำสุด (%)</label><input id="roe_min" type="number" placeholder="เช่น 10"></div>
+          <div><label>D/E สูงสุด</label><input id="de_max" type="number" placeholder="เช่น 1.5"></div>
+          <div><label>ปันผลต่ำสุด (%)</label><input id="dy_min" type="number" placeholder="เช่น 3"></div>
+          <div><label>Market Cap ต่ำสุด (B)</label><input id="mcap_min_b" type="number" placeholder="เช่น 1"></div>
+          <div><button class="btn" id="runScreen">สแกนทั้งตลาด</button></div>
         </div>
       </div>
-      <div class=”card”><div id=”screenResults”>${emptyState('🔎','กด “สแกนทั้งตลาด” เพื่อค้นหาหุ้นนอกสายตา')}</div></div>
+      <div class="card"><div id="screenResults">${emptyState('🔎','กด "สแกนทั้งตลาด" เพื่อค้นหาหุ้นนอกสายตา')}</div></div>
     </div>`;
 
   $$('.chip[data-mkt]').forEach(c => c.onclick = () => {
@@ -236,18 +236,18 @@ routes.screener = (app) => {
       }
       toast(`พบ ${r.count} หุ้นจาก ${scanned} ตัว`, 3000);
       resEl.innerHTML = `
-        <div class=”muted small” style=”margin-bottom:10px”>
-          สแกนแล้ว <b>${scanned}</b> ตัว · พบ <b class=”up”>${r.count}</b> หุ้นที่เข้าเกณฑ์
+        <div class="muted small" style="margin-bottom:10px">
+          สแกนแล้ว <b>${scanned}</b> ตัว · พบ <b class="up">${r.count}</b> หุ้นที่เข้าเกณฑ์
         </div>
-        <div class=”table-scroll”><table class=”tbl”><thead><tr>
+        <div class="table-scroll"><table class="tbl"><thead><tr>
           <th>หุ้น</th><th>กลุ่ม</th><th>ราคา</th><th>%วันนี้</th>
           <th>P/E</th><th>ROE</th><th>D/E</th><th>ปันผล</th><th>มูลค่าตลาด</th>
         </tr></thead>
-        <tbody>${r.results.map(s => `<tr data-t=”${s.ticker}”>
-          <td><b class=”mono”>${s.ticker}</b><div class=”muted small”>${(s.name||'').slice(0,22)}</div></td>
-          <td><span class=”muted small”>${(s.sector||'—').slice(0,18)}</span></td>
+        <tbody>${r.results.map(s => `<tr data-t="${s.ticker}">
+          <td><b class="mono">${s.ticker}</b><div class="muted small">${(s.name||'').slice(0,22)}</div></td>
+          <td><span class="muted small">${(s.sector||'—').slice(0,18)}</span></td>
           <td>${nf(s.price)}</td>
-          <td class=”${cls(s.change_pct)}”>${pf(s.change_pct)}</td>
+          <td class="${cls(s.change_pct)}">${pf(s.change_pct)}</td>
           <td>${nf(s.pe,1)}</td>
           <td>${nf(asPct(s.roe),1)}%</td>
           <td>${nf(asDE(s.debt_to_equity),2)}</td>
@@ -588,7 +588,7 @@ function toolBacktest(b) {
       <div><label>ช่วงเวลา</label><select id="bt_period"><option value="2y">2 ปี</option><option value="5y" selected>5 ปี</option><option value="10y">10 ปี</option></select></div>
       <div><button class="btn" id="bt_run">ทดสอบ</button></div>
     </div></div>
-    <div id="btResult">${emptyState('🧪','ตั้งค่าแล้วกด “ทดสอบ”')}</div>`;
+    <div id="btResult">${emptyState('🧪','ตั้งค่าแล้วกด "ทดสอบ"')}</div>`;
   $('#bt_run').onclick = async () => {
     const ticker = $('#bt_ticker').value.trim(); if (!ticker) { toast('ใส่ชื่อหุ้น'); return; }
     $('#btResult').innerHTML = loader('กำลัง backtest…');
