@@ -118,10 +118,21 @@ def _rule_based(question, ticker, context):
 
 def _ask_anthropic(question, context):
     try:
-        sys = ("คุณเป็นผู้ช่วยนักวิเคราะห์หุ้นมืออาชีพ ตอบเป็นภาษาไทย กระชับ "
-               "อ้างอิงตัวเลขจากบริบทที่ให้เสมอ และอธิบายเหตุผลของทุกคำแนะนำ "
-               "ห้ามรับประกันผลตอบแทน")
-        prompt = f"บริบทข้อมูลหุ้นจากระบบ:\n{_context_text(context)}\n\nคำถามผู้ใช้: {question}"
+        system_prompt = (
+            "คุณคือ Mr.ARM AI — ผู้ช่วยนักวิเคราะห์หุ้นมืออาชีพในแอป STOCK SEEKER\n"
+            "หน้าที่: วิเคราะห์หุ้นอย่างละเอียด อ้างอิงตัวเลขจากบริบทที่ให้เสมอ\n"
+            "สไตล์การตอบ:\n"
+            "- ตอบภาษาไทย กระชับ ชัดเจน มีโครงสร้าง\n"
+            "- ใช้ข้อมูลคะแนน/เทคนิคัล/พื้นฐานจากบริบทเป็นหลัก\n"
+            "- อธิบายเหตุผลของทุกคำแนะนำ\n"
+            "- ระบุจุดเข้า/ตัดขาดทุน/เป้าราคาถ้ามีข้อมูล\n"
+            "- ถ้าถามทั่วไปไม่เกี่ยวหุ้น ให้ตอบสั้น ๆ แล้วชวนกลับมาคุยเรื่องหุ้น\n"
+            "- ห้ามรับประกันผลตอบแทนหรือบอกให้ซื้อ/ขายชัดเจนโดยไม่มีเหตุผล"
+        )
+        user_prompt = (
+            f"ข้อมูลวิเคราะห์จากระบบ:\n{_context_text(context)}\n\n"
+            f"คำถาม: {question}"
+        )
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -130,17 +141,17 @@ def _ask_anthropic(question, context):
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-opus-4-8",
-                "max_tokens": 900,
-                "system": sys,
-                "messages": [{"role": "user", "content": prompt}],
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 1024,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
             },
             timeout=40,
         )
         data = r.json()
         return data["content"][0]["text"]
     except Exception as e:
-        return _rule_based(question, None, context) + f"\n\n(หมายเหตุ: เรียก LLM ไม่สำเร็จ: {e})"
+        return _rule_based(question, None, context) + f"\n\n(หมายเหตุ: เรียก Claude ไม่สำเร็จ: {e})"
 
 
 def _ask_openai(question, context):
