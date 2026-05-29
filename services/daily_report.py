@@ -4,24 +4,38 @@ Daily report — สแกน universe + watchlist หาหุ้นน่า�
 """
 import datetime as dt
 
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from config import Config
 from database import query
 from services import scoring, sentiment as sentiment_svc, macro
+from services.universe import get_universe
 
 
 def generate(market="th", top_n=5) -> dict:
-    base = Config.DEFAULT_TH_TICKERS if market == "th" else Config.DEFAULT_US_TICKERS
+    # ใช้ universe เต็ม + watchlist ส่วนตัว
+    full = get_universe(market)
     watch = [w["ticker"] for w in query("SELECT ticker FROM watchlist")]
-    universe = list(dict.fromkeys(base + watch))  # unique, รักษาลำดับ
+    # สุ่มดึง 80 ตัวจาก universe เพื่อความเร็ว + รวม watchlist ทั้งหมด
+    sample = random.sample(full, min(80, len(full)))
+    universe = list(dict.fromkeys(sample + watch))
 
     scored = []
-    for t in universe:
+    def _score(t):
         try:
             s = scoring.overall(t)
-            if s.get("total_score") is not None:
-                scored.append(s)
+            return s if s.get("total_score") is not None else None
         except Exception:
-            continue
+            return None
+
+    with ThreadPoolExecutor(max_workers=15) as ex:
+        for result in as_completed({ex.submit(_score, t): t for t in universe}):
+            s = result.result()
+            if s:
+                scored.append(s)
+
+    scored.sort(key=lambda x: x["total_score"], reverse=True)
 
     scored.sort(key=lambda x: x["total_score"], reverse=True)
     top_buys = [s for s in scored if s["total_score"] >= 55][:top_n]
