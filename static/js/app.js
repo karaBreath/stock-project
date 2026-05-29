@@ -43,14 +43,12 @@ const asDE = (v) => v === null || v === undefined ? null : (v > 10 ? v / 100 : v
 
 // ---------------- nav ----------------
 const NAV = [
-  { id: 'dashboard', label: 'หน้าแรก', ic: '🛰️', bottom: true },
-  { id: 'chart',     label: 'กราฟ',    ic: '📊',  bottom: true },
-  { id: 'screener',  label: 'คัดกรอง', ic: '🔎',  bottom: true },
-  { id: 'analyze',   label: 'วิเคราะห์',ic: '📈', bottom: true },
-  { id: 'portfolio', label: 'พอร์ต',   ic: '💼',  bottom: true },
-  { id: 'ai',        label: 'AI',       ic: '🤖',  bottom: false },
-  { id: 'tools',     label: 'เครื่องมือ',ic:'🧰', bottom: false },
-  { id: 'report',    label: 'รายงานวันนี้',ic:'📰',bottom: false },
+  { id: 'dashboard', label: 'หน้าแรก',    ic: '🛰️', bottom: true  },
+  { id: 'chart',     label: 'กราฟ',       ic: '📊',  bottom: true  },
+  { id: 'screener',  label: 'คัดกรอง',    ic: '🔎',  bottom: true  },
+  { id: 'analyze',   label: 'วิเคราะห์',  ic: '📈',  bottom: true  },
+  { id: 'tools',     label: 'เครื่องมือ', ic: '🧰',  bottom: false },
+  { id: 'report',    label: 'รายงานวันนี้',ic: '📰', bottom: false },
 ];
 
 function renderNav() {
@@ -279,7 +277,9 @@ routes.analyze = async (app, ticker) => {
   app.innerHTML = `<div class="view active" id="analyzeView">${loader('กำลังวิเคราะห์ '+ticker+' …')}</div>`;
   const score = await api('/score/' + encodeURIComponent(ticker));
   if (!score || score.price === null || score.error) {
-    $('#analyzeView').innerHTML = emptyState('⚠️', `ไม่พบข้อมูลหุ้น ${ticker} — ตรวจสอบสัญลักษณ์ (หุ้นไทยต้องลงท้าย .BK)`);
+    const isTH = ticker.toUpperCase().endsWith('.BK');
+    const hint = isTH ? '' : ' — หุ้นไทยลงท้าย .BK เช่น PTT.BK, หุ้นสหรัฐใช้สัญลักษณ์ตรงๆ เช่น AAPL';
+    $('#analyzeView').innerHTML = emptyState('⚠️', `ไม่พบข้อมูลหุ้น ${ticker}${hint}`);
     return;
   }
   const b = score.breakdown, lv = score.levels || {};
