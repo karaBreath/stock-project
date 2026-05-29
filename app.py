@@ -1,8 +1,8 @@
 """
 Stock Analysis App — Flask entry point
 
-รัน:  python app.py
-แล้วเปิดเบราว์เซอร์ที่ http://127.0.0.1:5000
+Local:    python app.py  -> http://127.0.0.1:5000
+Railway:  gunicorn ผ่าน Procfile (bind 0.0.0.0:$PORT)
 """
 from flask import Flask, render_template
 
