@@ -53,7 +53,7 @@ const NAV = [
 
 function renderNav() {
   $('#sideNav').innerHTML = NAV.map(n =>
-    `<div class="nav-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join('');
+    `<div class="nav-item" data-go="${n.id}" data-label="${n.label}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join('');
   $('#bottomNav').innerHTML = NAV.filter(n => n.bottom).map(n =>
     `<div class="bn-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join('');
 }
