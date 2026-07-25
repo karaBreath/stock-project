@@ -60,14 +60,7 @@ def run(ticker: str, days: int = 540, train_frac: float = 0.6,
     candidates = []
     for feat, ser in series_cache.items():
         for lag in lags:
-            xs, ys = [], []
-            for day, val in ser.items():
-                if day not in train_set or val is None:
-                    continue
-                fwd = rets.get(correlation._shift_days(day, lag))
-                if fwd is not None:
-                    xs.append(val)
-                    ys.append(fwd)
+            xs, ys = correlation.align(ser, rets, lag, allowed_days=train_set)
             if len(xs) < 20:
                 continue
             r, t = correlation._pearson(xs, ys)
@@ -133,8 +126,6 @@ def _simulate(ser: dict, rets: dict, period_dates: list, sig: dict, fee_pct: flo
     lag = sig["lag"]
     thr = sig["threshold"]
     positive = sig["r"] >= 0
-    period = set(period_dates)
-
     equity = 1.0
     curve = []
     trades = []

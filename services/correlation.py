@@ -23,6 +23,7 @@ GDELT ให้ timeline ย้อนหลังได้ถึง 1 ปี แ
 - ยิ่งทดสอบหลายคู่ ยิ่งเจอความสัมพันธ์ "บังเอิญ" (multiple comparisons)
   จึงมีเกณฑ์ n ขั้นต่ำ + t-stat และแจ้งเตือนใน UI เสมอ
 """
+import bisect
 import datetime as dt
 import math
 from statistics import NormalDist
@@ -89,6 +90,35 @@ def _shift_days(day: str, n: int) -> str:
         return (dt.date.fromisoformat(day) + dt.timedelta(days=n)).isoformat()
     except ValueError:
         return day
+
+
+def align(ser: dict, rets: dict, lag: int, allowed_days=None):
+    """
+    จับคู่ค่า feature กับผลตอบแทนล่วงหน้า lag **วันทำการ**
+
+    ทำไมต้องนับวันทำการ ไม่ใช่วันปฏิทิน
+    ---------------------------------
+    ข่าวมีทุกวันรวมเสาร์อาทิตย์ แต่ราคามีเฉพาะวันทำการ
+    ถ้าบวกวันปฏิทินตรง ๆ:
+      - ข่าววันศุกร์ + 3 วัน = วันจันทร์ = ห่างแค่ 1 วันทำการ (ไม่ใช่ 3)
+      - ข่าววันพุธ + 3 วัน = วันเสาร์ = ไม่มีราคา ตัวอย่างถูกทิ้ง
+    ผลคือ lag เดียวกันปนกันหลายระยะ ทำให้ความสัมพันธ์เบลอและ n น้อยลง
+
+    วิธีแก้: หาวันทำการแรกที่ >= วันของข่าว แล้วเลื่อนไปอีก lag ตำแหน่ง
+    """
+    ret_days = sorted(rets)
+    xs, ys = [], []
+    for day, val in ser.items():
+        if val is None:
+            continue
+        if allowed_days is not None and day not in allowed_days:
+            continue
+        pos = bisect.bisect_left(ret_days, day)
+        j = pos + lag
+        if 0 <= j < len(ret_days):
+            xs.append(val)
+            ys.append(rets[ret_days[j]])
+    return xs, ys
 
 
 # ---------------------------------------------------------------------------
@@ -201,12 +231,7 @@ def analyze(ticker: str, days: int = None, features=None, lags=None, save: bool 
         if len(ser) < 10:
             continue
         for lag in lags:
-            xs, ys = [], []
-            for day, val in ser.items():
-                fwd = rets.get(_shift_days(day, lag))
-                if fwd is not None and val is not None:
-                    xs.append(val)
-                    ys.append(fwd)
+            xs, ys = align(ser, rets, lag)
             n = len(xs)
             if n < 10:
                 continue

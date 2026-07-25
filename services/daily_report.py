@@ -24,7 +24,7 @@ def generate(market="th", top_n=5) -> dict:
     scored = []
     def _score(t):
         try:
-            s = scoring.overall(t)
+            s = scoring.overall(t, deep=False)
             return s if s.get("total_score") is not None else None
         except Exception:
             return None

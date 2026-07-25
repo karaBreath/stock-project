@@ -76,7 +76,7 @@ def fear_greed(market="us") -> dict:
     return result
 
 
-def stock_sentiment(ticker: str) -> dict:
+def stock_sentiment(ticker: str, deep: bool = True) -> dict:
     """
     รวม sentiment ข่าวของหุ้นรายตัว เป็นคะแนน 0-100
 
@@ -84,6 +84,10 @@ def stock_sentiment(ticker: str) -> dict:
       - keyword sentiment จากพาดหัวข่าว (Google News / Yahoo)
       - GDELT tone ซึ่งวิเคราะห์ข่าวทั่วโลก 65 ภาษามาให้แล้ว (แม่นกว่า)
     ถ้า GDELT ใช้ไม่ได้ จะถอยกลับไปใช้ keyword อย่างเดียวโดยอัตโนมัติ
+
+    deep=False -> ข้ามการเรียก GDELT (ใช้ตอนสแกนหุ้นทีละหลายสิบตัว เช่น
+    รายงานประจำวัน/screener) เพราะ GDELT คิดเป็น 1 HTTP call ต่อหุ้น 1 ตัว
+    ถ้าสแกน 80 ตัวจะยิง 80 ครั้ง ช้ามากและโดน rate limit
     """
     q = stock_data.get_quote(ticker)
     name = q.get("name") or ticker
@@ -94,7 +98,7 @@ def stock_sentiment(ticker: str) -> dict:
     kw_score = int(max(0, min(100, round(50 + raw * 50))))
 
     # ---- GDELT tone (ถ้าใช้ได้ให้ถ่วงน้ำหนัก 60%) ----
-    tone = gdelt.stock_tone(ticker, name)
+    tone = gdelt.stock_tone(ticker, name) if deep else {"ok": False, "skipped": True}
     if tone.get("ok") and tone.get("score") is not None:
         score = int(round(tone["score"] * 0.6 + kw_score * 0.4))
         source = "gdelt+keyword"

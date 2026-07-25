@@ -10,10 +10,16 @@ from services import (fundamental, technical, sentiment as sentiment_svc,
 WEIGHTS = {"fundamental": 0.45, "technical": 0.35, "sentiment": 0.20}
 
 
-def overall(ticker: str) -> dict:
+def overall(ticker: str, deep: bool = True) -> dict:
+    """
+    คะแนนรวม 0-100
+
+    deep=False -> ข้ามการเรียก GDELT รายหุ้น (ใช้ตอนสแกนหลายสิบตัว)
+    ส่วน catalyst ยังทำงานปกติเพราะอ่านจาก DB + สภาพข่าวโลกที่ cache ไว้แล้ว
+    """
     fund = fundamental.analyze(ticker)
     tech = technical.analyze(ticker)
-    senti = sentiment_svc.stock_sentiment(ticker)
+    senti = sentiment_svc.stock_sentiment(ticker, deep=deep)
 
     f_score = fund.get("fund_score", 50)
     t_score = tech.get("tech_score", 50)
