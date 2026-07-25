@@ -568,3 +568,39 @@ body.chart-mode #app { height: 100%; }
   margin-right: 6px;
   vertical-align: middle;
 }
+
+/* ---- ไอคอนธีมข่าวลอยที่ปลายแท่งบนลูกโลก ---- */
+.globe-marker {
+  opacity: 0;                 /* เริ่มซ่อน รอ globe.gl สั่งแสดงเมื่ออยู่ด้านหน้า */
+  transition: opacity .25s ease, transform .18s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  transition: transform .18s ease;
+}
+.globe-marker:hover { transform: translate(-50%, -50%) scale(1.18); }
+
+.gm-badge {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid;
+  background: rgba(8, 10, 26, .82);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gm-badge svg { width: 17px; height: 17px; display: block; }
+
+.gm-cap {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 0 6px rgba(0, 0, 0, .95), 0 1px 2px rgba(0, 0, 0, .9);
+  letter-spacing: .3px;
+}

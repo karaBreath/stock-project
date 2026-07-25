@@ -4,6 +4,44 @@
    · routes.learn : เครื่องเรียนรู้ หาจุดเชื่อม ข่าวโลก ↔ ราคาหุ้น
    ============================================================ */
 
+// ---------- ไอคอนประจำธีมข่าว (SVG ฝังในไฟล์ ไม่ต้องโหลดจากเน็ต) ----------
+const ICON_SVG = {
+  // สงคราม — ดาบไขว้ (ปลายดาบชี้ขึ้น + การ์ดกันมือ + หัวด้ามกลม)
+  conflict: '<path d="M4.6 2.6l9.6 12.8M19.4 2.6L9.8 15.4"/>'
+          + '<path d="M10.2 11.4l5.6 3.6M13.8 11.4l-5.6 3.6"/>'
+          + '<path d="M14.9 16.2l2.4 3.2M9.1 16.2l-2.4 3.2"/>',
+  // พลังงาน/น้ำมัน — หยดน้ำมัน
+  energy: '<path d="M12 2.5S18 9.5 18 13.5a6 6 0 0 1-12 0C6 9.5 12 2.5 12 2.5z"/>',
+  // เงินเฟ้อ/ดอกเบี้ย — เครื่องหมายเปอร์เซ็นต์
+  inflation: '<circle cx="7" cy="7" r="2.6"/><circle cx="17" cy="17" r="2.6"/><path d="M19.5 4.5l-15 15"/>',
+  // การค้า/ภาษี — เรือขนส่งสินค้า
+  trade: '<path d="M2.5 16h19l-2.2 5H4.7z"/><path d="M6 16V9.5h12V16"/><path d="M9.5 9.5V6h5v3.5"/>',
+  // เทคโนโลยี/ชิป — ไมโครชิป
+  tech: '<rect x="7" y="7" width="10" height="10" rx="1.2"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
+  // ตลาดหุ้นโลก — แท่งเทียน
+  market: '<rect x="4" y="8.5" width="4" height="8" rx="0.8"/><path d="M6 4.5v4M6 16.5v3"/><rect x="15" y="5.5" width="4" height="9" rx="0.8"/><path d="M17 3v2.5M17 14.5v5"/>',
+  // ภัยพิบัติ/โรคระบาด — ไวรัส (หนามมีปุ่มปลาย + จุดข้างใน)
+  disaster: '<circle cx="12" cy="12" r="5"/>'
+          + '<path d="M12 3.4V7M12 17v3.6M3.4 12H7M17 12h3.6M5.9 5.9l2.5 2.5M15.6 15.6l2.5 2.5M18.1 5.9l-2.5 2.5M8.4 15.6l-2.5 2.5"/>'
+          + '<circle cx="12" cy="2.6" r="1.1"/><circle cx="12" cy="21.4" r="1.1"/>'
+          + '<circle cx="2.6" cy="12" r="1.1"/><circle cx="21.4" cy="12" r="1.1"/>'
+          + '<circle cx="10.3" cy="10.6" r="0.9"/><circle cx="13.6" cy="13.3" r="0.9"/>',
+  // ผลประกอบการ — เอกสาร + กราฟ
+  earnings: '<path d="M6 2.8h9l3.2 3.2V21H6z"/><path d="M9 14.5l2.2-2.2 2.2 2.2 3-3.8"/>',
+  // ข่าวไทย — หมุดปักแผนที่
+  thailand: '<path d="M12 21.5s6.8-6.6 6.8-11.6a6.8 6.8 0 1 0-13.6 0c0 5 6.8 11.6 6.8 11.6z"/><circle cx="12" cy="9.6" r="2.4"/>',
+};
+
+const ICONS_PER_THEME = 2;    // ปักไอคอนกี่จุดต่อธีม (มากกว่านี้จะรก)
+const MIN_ICON_SEP_DEG = 14;  // ระยะห่างขั้นต่ำระหว่างไอคอน (องศา) กันซ้อนทับ
+
+function themeIcon(theme, color) {
+  const path = ICON_SVG[theme];
+  if (!path) return '';
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="${color}"
+    stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+}
+
 // ---------- lazy loader ของ globe.gl (มี CDN สำรอง) ----------
 const GLOBE_CDNS = [
   'https://unpkg.com/globe.gl',
@@ -146,11 +184,24 @@ routes.globe = async (app) => {
         .showAtmosphere(true)
         .atmosphereColor('#4dd4ff')
         .atmosphereAltitude(0.18)
-        .pointAltitude(d => Math.min(0.14, 0.008 + Math.log10(1 + d.count) * 0.045))
+        .pointAltitude(barHeight)
         .pointColor(d => d.color)
-        .pointRadius(d => Math.min(0.42, 0.11 + Math.log10(1 + d.count) * 0.11))
+        .pointRadius(d => d.flagged
+          ? 0.13
+          : Math.min(0.42, 0.11 + Math.log10(1 + d.count) * 0.11))
         .pointLabel(d => `<div class="globe-tip"><b>${d.name || '—'}</b><br>${d.count} ข่าว</div>`)
         .onPointClick(d => showPointNews(d))
+        // ไอคอนธีมลอยอยู่ปลายแท่ง
+        .htmlLat(d => d.lat)
+        .htmlLng(d => d.lng)
+        .htmlAltitude(d => barHeight(d) + 0.02)
+        .htmlElement(makeMarker)
+        .htmlTransitionDuration(250)
+        // ไอคอนที่อยู่ "หลังโลก" ต้องจางลง ไม่ใช่ทะลุออกมา
+        .htmlElementVisibilityModifier((el, isVisible) => {
+          el.style.opacity = isVisible ? 1 : 0;
+          el.style.pointerEvents = isVisible ? 'auto' : 'none';
+        })
         // วงกระเพื่อมเน้นจุดที่ข่าวหนาแน่นที่สุด
         .ringColor(d => () => d.color)
         .ringMaxRadius(d => d.maxR)
@@ -170,10 +221,63 @@ routes.globe = async (app) => {
       };
     }
     const data = pts.map(p => ({ ...p, lng: p.lon }));
+    flagTopPerTheme(data);
     globe.pointsData(data);
+    // ไอคอนธีมเฉพาะจุดที่ถูกเลือก (ปลายแท่งที่ยื่นสูงกว่าเพื่อน)
+    globe.htmlElementsData(data.filter(d => d.flagged));
     // วงกระเพื่อมเฉพาะ 6 จุดที่ข่าวหนาแน่นสุด (มากกว่านี้จะรก)
     globe.ringsData([...data].sort((a, b) => b.count - a.count).slice(0, 6)
       .map(d => ({ ...d, maxR: 3.5 + Math.log10(1 + d.count) * 1.6 })));
+  }
+
+  // เลือกจุดที่ข่าวหนาแน่นสุดของแต่ละธีมมาปักไอคอน
+  // ข้ามจุดที่อยู่ใกล้ไอคอนเดิมเกินไป เพื่อไม่ให้ไอคอนซ้อนทับกัน
+  function flagTopPerTheme(data) {
+    const byTheme = {};
+    data.forEach(d => {
+      d.flagged = false;
+      (byTheme[d.theme || '_'] = byTheme[d.theme || '_'] || []).push(d);
+    });
+    const chosen = [];
+    Object.values(byTheme).forEach(arr => {
+      let n = 0;
+      for (const d of arr.sort((a, b) => b.count - a.count)) {
+        if (n >= ICONS_PER_THEME) break;
+        if (chosen.some(c => angularDist(c, d) < MIN_ICON_SEP_DEG)) continue;
+        d.flagged = true;
+        chosen.push(d);
+        n++;
+      }
+    });
+  }
+
+  // ระยะเชิงมุมระหว่าง 2 พิกัดบนทรงกลม (องศา) — สูตร haversine
+  function angularDist(a, b) {
+    const rad = x => x * Math.PI / 180;
+    const dLat = rad(a.lat - b.lat), dLng = rad(a.lng - b.lng);
+    const h = Math.sin(dLat / 2) ** 2
+      + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return 2 * Math.asin(Math.min(1, Math.sqrt(h))) * 180 / Math.PI;
+  }
+
+  // ความสูงของแท่ง — จุดที่มีไอคอนยื่นสูงกว่าเพื่อน เพื่อให้ไอคอนแยกออกจากผิวโลก
+  function barHeight(d) {
+    const base = Math.min(0.14, 0.008 + Math.log10(1 + d.count) * 0.045);
+    return d.flagged ? base + 0.22 : base;
+  }
+
+  // สร้างป้ายไอคอนที่ปลายแท่ง
+  function makeMarker(d) {
+    const el = document.createElement('div');
+    el.className = 'globe-marker';
+    el.innerHTML = `
+      <div class="gm-badge" style="border-color:${d.color};box-shadow:0 0 12px ${d.color}66">
+        ${themeIcon(d.theme, d.color)}
+      </div>
+      <div class="gm-cap" style="color:${d.color}">${bigNum(d.count)}</div>`;
+    el.title = `${d.name || ''} · ${d.count} ข่าว`;
+    el.onclick = (e) => { e.stopPropagation(); showPointNews(d); };
+    return el;
   }
 
   function sizeGlobe() {
