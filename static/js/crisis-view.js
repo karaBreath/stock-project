@@ -139,3 +139,88 @@ routes.crisis = async (app, ticker) => {
     }).join('') + `<div class="small muted" style="margin-top:8px">⚠️ ${r.caveat || ''}</div>`;
   }
 };
+
+/* ============================================================
+   VIEW: ตรวจระบบ — เช็คว่าแหล่งข้อมูลภายนอกใช้งานได้จริงไหม
+   ============================================================ */
+routes.selfcheck = async (app) => {
+  app.innerHTML = `
+    <div class="view active">
+      <div class="page-title">ตรวจระบบ 🩺</div>
+      <div class="page-sub">ยิงทดสอบทุกแหล่งข้อมูลจริง แล้วบอกว่าอะไรใช้ได้ อะไรพัง และพังเพราะอะไร</div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" id="scRun">เริ่มตรวจ</button>
+          <button class="btn ghost" id="scCopy" disabled>คัดลอกผลเป็นข้อความ</button>
+          <span class="small muted">ใช้เวลาราว 10-60 วินาที (ยิงเน็ตจริงทุกแหล่ง)</span>
+        </div>
+      </div>
+
+      <div id="scBody"></div>
+    </div>`;
+
+  let lastText = '';
+
+  $('#scRun').onclick = runCheck;
+  $('#scCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(lastText); toast('คัดลอกแล้ว'); }
+    catch (e) { toast('คัดลอกไม่ได้ — เลือกข้อความในกล่องด้านล่างแทน'); }
+  };
+
+  runCheck();
+
+  async function runCheck() {
+    $('#scRun').disabled = true;
+    $('#scBody').innerHTML = `<div class="card">${loader('กำลังยิงทดสอบทุกแหล่งข้อมูล…')}</div>`;
+    const r = await api('/selfcheck');
+    $('#scRun').disabled = false;
+    if (!r || !r.checks) {
+      $('#scBody').innerHTML = `<div class="card">${emptyState('⚠️', 'ตรวจไม่สำเร็จ')}</div>`;
+      return;
+    }
+
+    const col = r.ok ? 'var(--up)' : 'var(--down)';
+    const byGroup = {};
+    r.checks.forEach(c => (byGroup[c.group] = byGroup[c.group] || []).push(c));
+
+    lastText = r.checks.map(c =>
+      `[${c.ok ? 'OK  ' : 'FAIL'}] ${c.group}/${c.name} (${c.ms}ms) — ${c.detail}`
+      + (c.error ? ` | ${c.error}` : '')).join('\n');
+    $('#scCopy').disabled = false;
+
+    $('#scBody').innerHTML = `
+      <div class="card" style="margin-bottom:14px;border-color:${col}">
+        <div class="card-title">ผลตรวจ</div>
+        <div style="color:${col};font-weight:600;font-size:16px">${r.verdict}</div>
+        <div class="small muted" style="margin-top:6px">
+          ผ่าน ${r.passed}/${r.total} · ตรวจเมื่อ ${r.checked_at}
+        </div>
+        ${r.failed_names && r.failed_names.length
+          ? `<div class="small" style="margin-top:8px">ที่ใช้ไม่ได้: <b>${r.failed_names.join(' · ')}</b></div>`
+          : ''}
+      </div>
+
+      ${Object.entries(byGroup).map(([g, list]) => `
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title">${g}
+            <span class="small muted">(${list.filter(c => c.ok).length}/${list.length})</span></div>
+          <div class="table-scroll"><table class="tbl">
+            <thead><tr><th>รายการ</th><th>ผล</th><th>เวลา</th><th>รายละเอียด</th></tr></thead>
+            <tbody>${list.map(c => `<tr style="${c.ok ? '' : 'background:rgba(255,77,109,.07)'}">
+              <td>${c.name}<div class="small muted">${c.hint || ''}</div></td>
+              <td>${c.ok ? '<span class="up">✅ ผ่าน</span>' : '<span class="down">❌ ไม่ผ่าน</span>'}</td>
+              <td class="mono small">${c.ms}ms</td>
+              <td class="small">${c.detail || ''}
+                ${c.error ? `<div class="down small mono" style="margin-top:4px">${c.error}</div>` : ''}</td>
+            </tr>`).join('')}</tbody></table></div>
+        </div>`).join('')}
+
+      <div class="card">
+        <div class="card-title">ผลแบบข้อความ (ส่งต่อให้คนช่วยดูได้)</div>
+        <textarea readonly rows="10" style="width:100%;background:rgba(0,0,0,.35);color:var(--text);
+          border:1px solid var(--stroke);border-radius:var(--radius-sm);padding:10px;
+          font-family:monospace;font-size:12px">${lastText}</textarea>
+      </div>`;
+  }
+};

@@ -12,6 +12,7 @@ from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
     alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
+    selfcheck,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -342,6 +343,17 @@ def learn_links_ep():
     """ความสัมพันธ์ทั้งหมดที่เรียนรู้เก็บไว้แล้ว"""
     return jsonify(correlation.learned(request.args.get("target", ""),
                                        int(request.args.get("limit", 50))))
+
+
+# ---------------- 18) ตรวจระบบ ----------------
+@api.get("/selfcheck")
+def selfcheck_ep():
+    """ตรวจว่าแหล่งข้อมูลภายนอกทุกตัวใช้งานได้จริงไหม (ใช้เวลาสักครู่)"""
+    syms = request.args.get("symbols", "1") == "1"
+    res = selfcheck.run(include_symbols=syms)
+    if request.args.get("format") == "text":
+        return selfcheck.as_text(res), 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return jsonify(res)
 
 
 # ---------------- defaults / config ----------------

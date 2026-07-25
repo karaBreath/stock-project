@@ -51,6 +51,7 @@ const NAV = [
   { id: 'learn',     label: 'เครื่องเรียนรู้', ic: '🧠', bottom: false },
   { id: 'crisis',    label: 'บทเรียนวิกฤต', ic: '⚠️',  bottom: false },
   { id: 'tools',     label: 'เครื่องมือ', ic: '🧰',  bottom: false },
+  { id: 'selfcheck', label: 'ตรวจระบบ',   ic: '🩺',  bottom: false },
   { id: 'report',    label: 'รายงานวันนี้',ic: '📰', bottom: false },
 ];
 
