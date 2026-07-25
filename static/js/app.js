@@ -203,7 +203,67 @@ routes.screener = (app) => {
         </div>
       </div>
       <div class="card"><div id="screenResults">${emptyState('🔎','กด "สแกนทั้งตลาด" เพื่อค้นหาหุ้นนอกสายตา')}</div></div>
+
+      <div class="card" style="margin-top:16px;border-color:var(--neon-purple)">
+        <div class="card-title">📊 หา setup Volume Profile ตอนนี้</div>
+        <div class="small muted" style="margin-bottom:10px">
+          สแกนหาหุ้นที่กำลังเข้า setup VAB/VAR (เบรก/เด้งจาก Value Area) พร้อมจุดเข้า-ออก
+          · VP ดึงราคา intraday ต่อตัว จึงสแกนได้ทีละ ~60 ตัว
+        </div>
+        <div class="chips" style="margin-bottom:12px">
+          <span class="chip active" data-vpsrc="watchlist">รายการเฝ้าดู</span>
+          <span class="chip" data-vpsrc="us">หุ้นสหรัฐ (60 ตัวแรก)</span>
+          <span class="chip" data-vpsrc="th">หุ้นไทย (60 ตัวแรก)</span>
+        </div>
+        <button class="btn" id="runVpScan">หา setup</button>
+        <div id="vpScanResults" style="margin-top:14px"></div>
+      </div>
     </div>`;
+
+    let vpSrc = 'watchlist';
+    $$('.chip[data-vpsrc]').forEach(c => c.onclick = () => {
+      vpSrc = c.dataset.vpsrc;
+      $$('.chip[data-vpsrc]').forEach(x => x.classList.toggle('active', x === c));
+    });
+    $('#runVpScan').onclick = runVpScan;
+
+    async function runVpScan() {
+      const btn = $('#runVpScan');
+      btn.disabled = true; btn.textContent = 'กำลังสแกน…';
+      const el = $('#vpScanResults');
+      el.innerHTML = loader('กำลังหา setup (ดึง Volume Profile ต่อตัว อาจใช้เวลาสักครู่)…');
+      toast('กำลังสแกน setup — อาจใช้เวลา 30-60 วินาที', 40000);
+      try {
+        const r = await api('/volume-scan', { method: 'POST', body: { source: vpSrc } });
+        btn.disabled = false; btn.textContent = 'หา setup';
+        if (!r.hits?.length) {
+          el.innerHTML = emptyState('📊', `${r.note || ''}<br>ตอนนี้ไม่มีหุ้นเข้า setup VAB/VAR`);
+          return;
+        }
+        el.innerHTML = `
+          <div class="small muted" style="margin-bottom:10px">${r.note} · พบ <b class="up">${r.count}</b> ตัวที่เข้า setup</div>
+          <div class="table-scroll"><table class="tbl"><thead><tr>
+            <th>หุ้น</th><th>setup</th><th>ราคา</th><th>เข้า</th><th>ตัดขาดทุน</th><th>เป้า</th><th>R:R</th><th>คะแนน+</th>
+          </tr></thead>
+          <tbody>${r.hits.map(h => `<tr data-t="${h.ticker}">
+            <td><b class="mono">${h.ticker}</b></td>
+            <td><span class="pill ${h.passes_gate?'buy':'hold'}">${h.setup}</span></td>
+            <td>${nf(h.price)}</td>
+            <td class="up">${nf(h.levels?.entry)}</td>
+            <td class="down">${nf(h.levels?.stop_loss)}</td>
+            <td class="up">${nf(h.levels?.target)}</td>
+            <td class="mono">${h.risk_reward?('1:'+nf(h.risk_reward,1)):'—'}</td>
+            <td class="${h.adjust>0?'up':'muted'}">${h.adjust>0?'+'+nf(h.adjust,1):'—'}</td>
+          </tr>`).join('')}</tbody></table></div>
+          <div class="small muted" style="margin-top:8px">
+            "คะแนน+" = ที่จะบวกเข้าคะแนนรวม · ขีด — คือเข้า setup แต่ไม่ผ่านประตู (R:R ต่ำ/backtest ไม่ผ่าน)
+          </div>`;
+        $$('#vpScanResults tr[data-t]').forEach(tr => tr.onclick = () => go('analyze', tr.dataset.t));
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'หา setup';
+        el.innerHTML = emptyState('⚠️', 'สแกนไม่สำเร็จ ลองใหม่');
+      }
+    }
 
   $$('.chip[data-mkt]').forEach(c => c.onclick = () => {
     currentMarket = c.dataset.mkt;

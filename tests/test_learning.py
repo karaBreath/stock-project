@@ -387,3 +387,41 @@ def test_vp_score_gate_rejects_lvn_and_bad_rr(monkeypatch):
     monkeypatch.setattr(VP, "detect_setup", lambda t: {
         "ok": True, "setup": None, "evidence": "กลาง VA"})
     assert VP._score_component("X")["adjust"] == 0        # ไม่มี setup
+
+
+def test_vp_scan_filters_and_sorts(monkeypatch):
+    """
+    scan_setups: คืนเฉพาะหุ้นที่เข้า setup, ตัดตัวที่ไม่เข้า,
+    เรียงตัวที่บวกคะแนนได้ (ผ่านประตู) ขึ้นก่อน
+    """
+    from services import volume_profile as VP
+
+    fake = {
+        "AAA": {"ok": True, "setup": "VAB", "price": 100,
+                "levels": {"risk_reward": 2.0, "entry": 100, "stop_loss": 98, "target": 104}},
+        "BBB": {"ok": True, "setup": "VAR", "price": 50,
+                "levels": {"risk_reward": 0.5, "entry": 50, "stop_loss": 48, "target": 51}},  # R:R ต่ำ
+        "CCC": {"ok": True, "setup": None},                                                    # ไม่เข้า
+    }
+    monkeypatch.setattr(VP, "detect_setup", lambda t: fake.get(t, {"ok": False}))
+    monkeypatch.setattr(VP, "SETUP_EXPECTANCY", {
+        "VAB": {"oos_r": 0.019}, "VAR": {"oos_r": 0.029}})
+
+    r = VP.scan_setups(["AAA", "BBB", "CCC"], max_scan=10, workers=2)
+    tickers = [h["ticker"] for h in r["hits"]]
+    assert "CCC" not in tickers                 # ไม่เข้า setup -> ตัดออก
+    assert set(tickers) == {"AAA", "BBB"}       # 2 ตัวเข้า setup
+    assert r["hits"][0]["ticker"] == "AAA"      # ผ่านประตู (adjust>0) ขึ้นก่อน
+    assert r["hits"][0]["adjust"] > 0
+    bbb = next(h for h in r["hits"] if h["ticker"] == "BBB")
+    assert bbb["adjust"] == 0 and bbb["passes_gate"] is False   # R:R ต่ำ -> ไม่บวก
+
+
+def test_vp_scan_caps_and_reports_dropped(monkeypatch):
+    """สแกนเกิน max_scan ต้องตัด และรายงานจำนวนที่ตัดออก (ไม่เงียบ)"""
+    from services import volume_profile as VP
+    monkeypatch.setattr(VP, "detect_setup", lambda t: {"ok": True, "setup": None})
+    r = VP.scan_setups([f"T{i}" for i in range(100)], max_scan=60)
+    assert r["scanned"] == 60
+    assert r["dropped"] == 40
+    assert "40" in r["note"]

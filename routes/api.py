@@ -358,6 +358,27 @@ def volume_setup_ep(ticker):
     return jsonify(volume_profile.detect_setup(ticker))
 
 
+@api.post("/volume-scan")
+def volume_scan_ep():
+    """สแกนหาหุ้นที่กำลังเข้า setup VAB/VAR ตอนนี้ (จาก watchlist หรือ universe)"""
+    a = _args()
+    source = a.get("source", "watchlist")
+    if source == "watchlist":
+        tickers = [w["ticker"] for w in query("SELECT ticker FROM watchlist")]
+        if not tickers:
+            tickers = Config.DEFAULT_US_TICKERS
+    elif source == "th":
+        from services.universe import get_universe
+        tickers = get_universe("th")
+    elif source == "us":
+        from services.universe import get_universe
+        tickers = get_universe("us")
+    else:
+        tickers = a.get("tickers") or Config.DEFAULT_US_TICKERS
+    return jsonify(volume_profile.scan_setups(
+        tickers, max_scan=int(a.get("max_scan", volume_profile.SCAN_CAP))))
+
+
 # ---------------- 18) ตรวจระบบ ----------------
 @api.get("/selfcheck")
 def selfcheck_ep():

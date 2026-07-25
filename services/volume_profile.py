@@ -20,6 +20,8 @@ Volume Profile engine — พอร์ตแนวคิดจาก volume-edge
 (แทบเสมอตัว และแพ้ถือ SPY เฉย ๆ) — เครื่องมือนี้ช่วยเรื่องวินัย + จังหวะ +
 คำอธิบาย ไม่ใช่สัญญาว่ารวย
 """
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
 import pandas as pd
 
@@ -236,8 +238,8 @@ def detect_setup(ticker: str) -> dict:
                             f"{'ไม่มี volume ยืนยัน' if not vol_ok else 'ไม่ปิดเหนือขอบชัดเจน'}"
                             " — รอการยืนยัน")
 
-    # ---- VAR: แหย่ใต้ VAL แล้วเด้งกลับ ----
-    elif _poked_below_and_recovered(daily, val):
+    # ---- VAR: แหย่ใต้ VAL แล้วเด้งกลับ (ต้องยังต่ำกว่า POC = มีที่ให้วิ่งขึ้น) ----
+    elif _poked_below_and_recovered(daily, val) and price < poc:
         setup = "VAR"
         evidence.append(f"ราคาเคยแหย่ใต้ขอบล่าง Value Area (VAL {_fmt(val)}) "
                         f"แล้วถูกแรงซื้อดันกลับเข้าโซน")
@@ -313,6 +315,75 @@ def _poked_below_and_recovered(daily: pd.DataFrame, val, window: int = 5):
 
 def _fmt(v):
     return "—" if v is None else f"{v:,.2f}"
+
+
+# ---------------------------------------------------------------------------
+# สแกนทั้งตลาด/รายการ หา "หุ้นที่กำลังเข้า setup ตอนนี้"
+# ---------------------------------------------------------------------------
+SCAN_CAP = 60      # จำกัดจำนวนหุ้นต่อรอบ (VP ดึง intraday ต่อตัว = หนัก)
+
+
+def scan_setups(tickers, max_scan: int = SCAN_CAP, workers: int = 8) -> dict:
+    """
+    วน detect_setup หาหุ้นที่เข้า setup VAB/VAR
+    คืนเฉพาะตัวที่เข้า setup + ผ่าน 3 ประตู (บวกคะแนนได้จริง) เรียงตาม R:R
+
+    ⚠️ จำกัด max_scan เพราะแต่ละตัวต้องดึงราคา intraday — สแกนทั้ง 500 ตัว
+    จะช้ามากและโดน rate limit ถ้าตัดจำนวน จะบอกว่าตัดกี่ตัวใน UI
+    """
+    all_t = list(dict.fromkeys(tickers or []))
+    scanned = all_t[:max_scan]
+    dropped = len(all_t) - len(scanned)
+
+    hits = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        fut = {ex.submit(_scan_one, t): t for t in scanned}
+        for f in as_completed(fut):
+            r = f.result()
+            if r:
+                hits.append(r)
+
+    # เรียง: setup ที่บวกคะแนนได้ก่อน แล้วตาม R:R
+    hits.sort(key=lambda h: (h["adjust"], h.get("risk_reward") or 0), reverse=True)
+    return {
+        "ok": True,
+        "count": len(hits),
+        "scanned": len(scanned),
+        "dropped": dropped,
+        "hits": hits,
+        "note": (f"สแกน {len(scanned)} ตัวแรก (ตัดออก {dropped} ตัวเพราะ VP ดึง "
+                 "intraday ต่อตัวจะช้าเกิน)" if dropped else f"สแกนครบ {len(scanned)} ตัว"),
+    }
+
+
+def _scan_one(ticker):
+    try:
+        s = detect_setup(ticker)
+    except Exception:
+        return None
+    if not s.get("ok") or not s.get("setup"):
+        return None
+    sc = _score_component(ticker) if False else None   # ไม่เรียกซ้ำ ใช้ค่าจาก s
+    exp = SETUP_EXPECTANCY.get(s["setup"], {})
+    lv = s.get("levels") or {}
+    rr = lv.get("risk_reward")
+    # คำนวณ adjust ตามเกณฑ์เดียวกับ _score_component (3 ประตู)
+    if exp.get("gated") or exp.get("oos_r", 0) <= 0 or not rr or rr < 1.2:
+        adjust = 0
+    else:
+        adjust = round(min(8, 3 + min(5, rr * 1.5)), 1)
+    return {
+        "ticker": ticker,
+        "setup": s["setup"],
+        "price": s.get("price"),
+        "poc": s.get("poc"), "val": s.get("val"), "vah": s.get("vah"),
+        "risk_reward": rr,
+        "adjust": adjust,
+        "passes_gate": adjust > 0,
+        "evidence": s.get("evidence"),
+        "levels": lv,
+        "expectancy": exp,
+    }
 
 
 def _score_component(ticker: str) -> dict:
