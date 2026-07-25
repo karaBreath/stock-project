@@ -11,7 +11,7 @@ from database import query, execute
 from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
-    alerts, daily_report, ai_advisory,
+    alerts, daily_report, ai_advisory, gdelt, correlation,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -220,6 +220,78 @@ def watchlist_add():
 def watchlist_delete(ticker):
     execute("DELETE FROM watchlist WHERE ticker = ?", (stock_data.normalize_ticker(ticker),))
     return jsonify({"ok": True})
+
+
+# ---------------- 15) ข่าวโลก GDELT + ลูกโลก 3D ----------------
+@api.get("/world/points")
+def world_points_ep():
+    """จุดข่าวพร้อมพิกัดสำหรับปักบนลูกโลก (ระบุ theme= เพื่อกรองธีมเดียว)"""
+    theme = request.args.get("theme", "")
+    timespan = request.args.get("timespan", "24h")
+    if theme:
+        return jsonify(gdelt.world_points(theme=theme, timespan=timespan))
+    return jsonify(gdelt.all_theme_points(timespan=timespan))
+
+
+@api.get("/world/themes")
+def world_themes_ep():
+    """รายชื่อธีมข่าวโลกทั้งหมด + สี"""
+    return jsonify({"themes": [
+        {"key": k, "label": v[0], "query": v[1], "color": v[2]}
+        for k, v in Config.WORLD_THEMES.items()
+    ]})
+
+
+@api.get("/world/signals")
+def world_signals_ep():
+    """tone ล่าสุดของแต่ละธีมข่าวโลก (ข่าวดี/ร้ายผิดปกติแค่ไหน)"""
+    return jsonify(gdelt.theme_signals(request.args.get("timespan", "7d")))
+
+
+@api.get("/world/news")
+def world_news_ep():
+    q = request.args.get("q", "")
+    theme = request.args.get("theme", "")
+    if theme and not q:
+        q = gdelt.theme_query(theme)
+    return jsonify(gdelt.articles(q or "stock market",
+                                  limit=int(request.args.get("limit", 20)),
+                                  timespan=request.args.get("timespan", "24h")))
+
+
+@api.get("/world/tone")
+def world_tone_ep():
+    """timeline ของ tone (ใช้วาดกราฟข่าว vs ราคา)"""
+    theme = request.args.get("theme", "")
+    q = gdelt.theme_query(theme) if theme else request.args.get("q", "")
+    days = int(request.args.get("days", Config.LEARN_WINDOW_DAYS))
+    return jsonify(gdelt.tone_timeline(q, timespan=f"{days}d"))
+
+
+# ---------------- 16) Learning engine (หาจุดเชื่อม ข่าว ↔ ราคา) ----------------
+@api.get("/learn/status")
+def learn_status_ep():
+    return jsonify(correlation.status())
+
+
+@api.post("/learn/snapshot")
+def learn_snapshot_ep():
+    """เก็บภาพนิ่งของข่าว+ราคา ณ ตอนนี้ลงคลังข้อมูลสะสม"""
+    return jsonify(correlation.snapshot())
+
+
+@api.get("/learn/analyze/<ticker>")
+def learn_analyze_ep(ticker):
+    """หาความสัมพันธ์ ข่าวโลก/มหภาค ↔ ผลตอบแทนของหุ้นตัวนี้"""
+    days = int(request.args.get("days", Config.LEARN_WINDOW_DAYS))
+    return jsonify(correlation.analyze(ticker, days=days))
+
+
+@api.get("/learn/links")
+def learn_links_ep():
+    """ความสัมพันธ์ทั้งหมดที่เรียนรู้เก็บไว้แล้ว"""
+    return jsonify(correlation.learned(request.args.get("target", ""),
+                                       int(request.args.get("limit", 50))))
 
 
 # ---------------- defaults / config ----------------

@@ -51,6 +51,41 @@ class Config:
         "TSLA", "META", "JPM", "XOM", "KO",
     ]
 
+    # --- GDELT (ข่าวทั่วโลก 65 ภาษา · ฟรี ไม่ต้องใช้ API key) ---
+    GDELT_BASE = os.environ.get("GDELT_BASE", "https://api.gdeltproject.org/api/v2")
+    GDELT_TIMEOUT = int(os.environ.get("GDELT_TIMEOUT", "25"))
+    GDELT_CACHE_TTL = int(os.environ.get("GDELT_CACHE_TTL", "900"))    # จุดบนลูกโลก
+    GDELT_TIMELINE_CACHE_TTL = int(os.environ.get("GDELT_TIMELINE_CACHE_TTL", "3600"))
+    GDELT_MAX_POINTS = int(os.environ.get("GDELT_MAX_POINTS", "350"))
+
+    # ธีมข่าวโลกที่ใช้เป็น "สัญญาณ" ป้อนเข้าเครื่องเรียนรู้
+    # key -> (ชื่อไทย, GDELT query, สีบนลูกโลก)
+    WORLD_THEMES = {
+        "conflict": ("สงคราม/ความขัดแย้ง",
+                     '(war OR conflict OR airstrike OR invasion OR ceasefire)', "#ff4d6d"),
+        "energy":   ("พลังงาน/น้ำมัน",
+                     '(oil price OR crude oil OR OPEC OR natural gas OR refinery)', "#ffa94d"),
+        "inflation": ("เงินเฟ้อ/ดอกเบี้ย",
+                      '(inflation OR interest rate OR central bank OR "Federal Reserve")', "#ffd43b"),
+        "trade":    ("การค้า/ภาษี",
+                     '(tariff OR trade war OR export ban OR sanctions OR supply chain)', "#74c0fc"),
+        "tech":     ("เทคโนโลยี/ชิป",
+                     '(semiconductor OR "artificial intelligence" OR chip export OR data center)', "#b197fc"),
+        "market":   ("ตลาดหุ้นโลก",
+                     '(stock market OR equities OR "bear market" OR "bull market" OR selloff)', "#63e6be"),
+        "disaster": ("ภัยพิบัติ/โรคระบาด",
+                     '(earthquake OR flood OR hurricane OR outbreak OR pandemic)', "#e599f7"),
+        "thailand": ("ข่าวไทย",
+                     '("Thailand economy" OR "Thai baht" OR "Thai stocks" OR Bangkok)', "#4dd4ff"),
+    }
+
+    # --- Learning engine (เก็บข้อมูลสะสม → หาความสัมพันธ์ข่าว ↔ ราคา) ---
+    LEARN_AUTO = os.environ.get("LEARN_AUTO", "1") == "1"          # เก็บ snapshot อัตโนมัติ
+    LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL", "3600"))  # ทุกกี่วินาที
+    LEARN_WINDOW_DAYS = int(os.environ.get("LEARN_WINDOW_DAYS", "180"))
+    LEARN_MIN_SAMPLES = int(os.environ.get("LEARN_MIN_SAMPLES", "30"))  # n ขั้นต่ำถึงจะเชื่อ
+    LEARN_LAGS = [0, 1, 2, 3, 5]   # feature วันนี้ → ผลตอบแทนอีกกี่วัน
+
     # ตัวแทนข้อมูลมหภาค (ใช้สัญลักษณ์ของ Yahoo Finance)
     MACRO_SYMBOLS = {
         "gold": ("GC=F", "ทองคำ (USD/oz)"),

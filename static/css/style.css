@@ -535,3 +535,36 @@ body.chart-mode #app { height: 100%; }
   .cv-left-toolbar { width: 36px; }
   .cv-tool-btn { font-size: 14px; }
 }
+
+/* ============================================================
+   Globe view (ลูกโลกข่าวโลก) + Learning engine
+   ============================================================ */
+.globe-box {
+  position: relative;
+  min-height: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 45%, rgba(77, 212, 255, .07), transparent 65%);
+}
+.globe-box canvas { display: block; }
+
+.globe-tip {
+  background: var(--glass-strong);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+  backdrop-filter: blur(8px);
+}
+
+.chip .dot,
+.stat-row .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}

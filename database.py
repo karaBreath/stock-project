@@ -94,6 +94,38 @@ def init_db():
                 answer TEXT,
                 created_at REAL DEFAULT (strftime('%s','now'))
             );
+
+            -- ========= Learning engine =========
+            -- คลังข้อมูลสะสม (long format) — ยิ่งเก็บนาน ยิ่งหาความสัมพันธ์ได้แม่น
+            -- kind: 'news' (tone ธีมข่าว) | 'volume' | 'macro' | 'price'
+            -- key : 'conflict' | 'gold' | 'PTT.BK' ...
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                day TEXT NOT NULL,               -- 'YYYY-MM-DD' (bucket รายวัน)
+                kind TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value REAL,
+                meta TEXT,
+                ts REAL DEFAULT (strftime('%s','now')),
+                UNIQUE(day, kind, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_obs_lookup ON observations(kind, key, day);
+
+            -- ความสัมพันธ์ที่ "เรียนรู้" ได้แล้ว (cache + ประวัติการเรียนรู้)
+            CREATE TABLE IF NOT EXISTS correlations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target TEXT NOT NULL,            -- ticker
+                feature TEXT NOT NULL,           -- 'news:conflict' | 'macro:gold'
+                lag INTEGER NOT NULL,            -- feature วันนี้ -> ผลตอบแทนอีกกี่วัน
+                r REAL,
+                n INTEGER,
+                t_stat REAL,
+                hit_rate REAL,
+                window_days INTEGER,
+                updated_at REAL DEFAULT (strftime('%s','now')),
+                UNIQUE(target, feature, lag)
+            );
+            CREATE INDEX IF NOT EXISTS idx_corr_target ON correlations(target, r);
             """
         )
 
@@ -119,3 +151,38 @@ def cache_set(key, value, ttl):
         "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload, expires_at=excluded.expires_at",
         (key, payload, time.time() + ttl),
     )
+
+
+# ----- observation helpers (คลังข้อมูลสะสมของเครื่องเรียนรู้) -----
+def obs_upsert(day, kind, key, value, meta=None):
+    """บันทึกค่า 1 จุด (1 วัน / 1 ตัวชี้วัด) — เรียกซ้ำวันเดิมจะทับค่าเดิม"""
+    if value is None:
+        return
+    execute(
+        "INSERT INTO observations(day, kind, key, value, meta) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(day, kind, key) DO UPDATE SET "
+        "value=excluded.value, meta=excluded.meta, ts=strftime('%s','now')",
+        (day, kind, key, float(value), json.dumps(meta, default=str) if meta else None),
+    )
+
+
+def obs_series(kind, key, since_day=None):
+    """คืน {day: value} เรียงตามวัน"""
+    sql = "SELECT day, value FROM observations WHERE kind=? AND key=?"
+    params = [kind, key]
+    if since_day:
+        sql += " AND day >= ?"
+        params.append(since_day)
+    sql += " ORDER BY day"
+    return {r["day"]: r["value"] for r in query(sql, tuple(params))}
+
+
+def obs_stats():
+    """สรุปว่าคลังข้อมูลสะสมมาเท่าไหร่แล้ว"""
+    row = query(
+        "SELECT COUNT(*) AS rows, COUNT(DISTINCT day) AS days, "
+        "COUNT(DISTINCT kind || ':' || key) AS series, "
+        "MIN(day) AS first_day, MAX(day) AS last_day FROM observations",
+        one=True,
+    )
+    return row or {"rows": 0, "days": 0, "series": 0, "first_day": None, "last_day": None}
