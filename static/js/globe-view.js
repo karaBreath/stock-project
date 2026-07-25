@@ -253,6 +253,7 @@ routes.learn = async (app, ticker) => {
           </div>
           <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap">
             <button class="btn" id="lnRun">ค้นหาความสัมพันธ์</button>
+            <button class="btn ghost" id="lnBT">ทดสอบย้อนหลัง</button>
             <button class="btn ghost" id="lnAll">เรียนรู้ทั้ง watchlist</button>
             <button class="btn ghost" id="lnSnap">เก็บข้อมูลเดี๋ยวนี้</button>
           </div>
@@ -278,6 +279,85 @@ routes.learn = async (app, ticker) => {
     toast(r.ok ? `เก็บแล้ว: ข่าว ${r.saved.news} · มหภาค ${r.saved.macro} · ราคา ${r.saved.price}` : 'เก็บไม่สำเร็จ');
     loadStatus();
   };
+
+  $('#lnBT').onclick = runBacktest;
+
+  async function runBacktest() {
+    const t = ($('#lnTicker').value || '').trim().toUpperCase();
+    if (!t) { toast('ใส่สัญลักษณ์หุ้นก่อน'); return; }
+    $('#lnResult').innerHTML = `<div class="card">${loader('กำลังทดสอบย้อนหลัง… (แบ่งข้อมูลเรียนรู้/ทดสอบ)')}</div>`;
+
+    const r = await api(`/learn/backtest/${encodeURIComponent(t)}?days=540`);
+    if (!r.ok) {
+      $('#lnResult').innerHTML = `<div class="card">${emptyState('⚠️', r.error || 'ทดสอบไม่สำเร็จ')}</div>`;
+      return;
+    }
+
+    const v = r.verdict || {};
+    const vCol = { good: 'var(--up)', weak: 'var(--neon-purple)',
+                   bad: 'var(--down)', overfit: 'var(--down)' }[v.level] || 'var(--muted)';
+
+    // ไม่เจอสัญญาณ = ไม่มีอะไรให้เทรด
+    if (!r.signal) {
+      $('#lnResult').innerHTML = `<div class="card" style="margin-bottom:14px">
+        <div class="card-title">ผลทดสอบย้อนหลัง ${r.ticker}</div>
+        <div style="color:${vCol};font-weight:600;margin-bottom:8px">${v.text || ''}</div>
+        ${splitInfo(r)}</div>`;
+      return;
+    }
+
+    const s = r.signal, oos = r.out_of_sample, ins = r.in_sample, bh = r.buyhold;
+    const cell = (val, suffix = '%') =>
+      val === null || val === undefined ? '—' : `<span class="${cls(val)}">${nf(val, 1)}${suffix}</span>`;
+
+    $('#lnResult').innerHTML = `
+      <div class="card" style="margin-bottom:14px;border-color:${vCol}">
+        <div class="card-title">ผลทดสอบย้อนหลัง ${r.ticker}</div>
+        <div style="color:${vCol};font-weight:600;line-height:1.6;margin-bottom:10px">${v.text || ''}</div>
+        ${splitInfo(r)}
+        <div class="small muted" style="margin-top:8px">
+          สัญญาณที่เจอจากช่วงเรียนรู้: <b>${s.label}</b> · ถือ ${s.lag} วัน ·
+          r=${nf(s.r, 3)} (เกณฑ์ ${nf(s.critical_r, 3)}) · หักค่าธรรมเนียม ${r.fee_pct}% ต่อขา
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-title">เทียบตัวเลข</div>
+        <div class="table-scroll"><table class="tbl">
+          <thead><tr>
+            <th>ช่วง</th><th>ผลตอบแทน</th><th>ต่อปี</th><th>จำนวนไม้</th>
+            <th>แม่น %</th><th>ขาดทุนสูงสุด</th><th>ถือหุ้น %เวลา</th>
+          </tr></thead><tbody>
+            <tr style="opacity:.55">
+              <td>เรียนรู้ (in-sample)<div class="small muted">${r.train.from} → ${r.train.to}</div></td>
+              <td>${cell(ins.total_return_pct)}</td><td>${cell(ins.annualized_pct)}</td>
+              <td class="mono">${ins.num_trades}</td><td class="mono">${nf(ins.win_rate, 1)}%</td>
+              <td>${cell(ins.max_drawdown_pct)}</td><td class="mono">${nf(ins.exposure_pct, 0)}%</td>
+            </tr>
+            <tr style="font-weight:600">
+              <td>ทดสอบ (out-of-sample) ⭐<div class="small muted">${r.test.from} → ${r.test.to}</div></td>
+              <td>${cell(oos.total_return_pct)}</td><td>${cell(oos.annualized_pct)}</td>
+              <td class="mono">${oos.num_trades}</td><td class="mono">${nf(oos.win_rate, 1)}%</td>
+              <td>${cell(oos.max_drawdown_pct)}</td><td class="mono">${nf(oos.exposure_pct, 0)}%</td>
+            </tr>
+            <tr>
+              <td>ซื้อแล้วถือ (ช่วงทดสอบ)</td>
+              <td>${cell(bh.total_return_pct)}</td><td>${cell(bh.annualized_pct)}</td>
+              <td class="mono">1</td><td class="mono">—</td>
+              <td>${cell(bh.max_drawdown_pct)}</td><td class="mono">100%</td>
+            </tr>
+          </tbody></table></div>
+        <div class="small muted" style="margin-top:10px">
+          ⭐ <b>เชื่อเฉพาะแถวช่วงทดสอบ</b> — แถวเรียนรู้จะสวยกว่าเสมอเพราะสัญญาณถูกเลือกมาจากข้อมูลชุดนั้น
+        </div>
+      </div>`;
+  }
+
+  function splitInfo(r) {
+    return `<div class="small muted">
+      แบ่งข้อมูล ${r.days} วัน → เรียนรู้ ${r.train.days} วัน / ทดสอบ ${r.test.days} วัน ·
+      ทดสอบ ${r.tested_pairs} คู่สัญญาณ ผ่านเกณฑ์ ${r.passing_count} คู่</div>`;
+  }
 
   $('#lnAll').onclick = async () => {
     const btn = $('#lnAll');

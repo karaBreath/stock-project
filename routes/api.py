@@ -11,7 +11,7 @@ from database import query, execute
 from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
-    alerts, daily_report, ai_advisory, gdelt, correlation,
+    alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -302,6 +302,39 @@ def learn_watchlist_ep():
     return jsonify(correlation.learn_watchlist(
         days=int(a.get("days") or Config.LEARN_WINDOW_DAYS),
         limit=int(a.get("limit") or 15)))
+
+
+@api.get("/learn/backtest/<ticker>")
+def learn_backtest_ep(ticker):
+    """
+    ทดสอบว่า "ถ้าเทรดตามสัญญาณข่าวจริง ๆ จะได้กำไรไหม"
+    แบ่งข้อมูล train/test — หาสัญญาณจาก train เทรดใน test เท่านั้น
+    """
+    return jsonify(news_backtest.run(
+        ticker,
+        days=int(request.args.get("days", 540)),
+        train_frac=float(request.args.get("train_frac", 0.6)),
+        fee_pct=float(request.args.get("fee", news_backtest.DEFAULT_FEE_PCT)),
+    ))
+
+
+# ---------------- 17) เรียนรู้จากวิกฤตในอดีต + สัญญาณเตือนล่วงหน้า ----------------
+@api.get("/crisis/list")
+def crisis_list_ep():
+    """รายชื่อวิกฤตสำคัญที่ใช้ศึกษา"""
+    return jsonify({"crises": crisis.CRISES})
+
+
+@api.get("/crisis/impact/<ticker>")
+def crisis_impact_ep(ticker):
+    """วิกฤตแต่ละครั้งทำให้หุ้นตัวนี้ร่วงแค่ไหน ฟื้นนานเท่าไหร่"""
+    return jsonify(crisis.impact(ticker, request.args.get("benchmark", "^GSPC")))
+
+
+@api.get("/crisis/signals")
+def crisis_signals_ep():
+    """สัญญาณเตือนล่วงหน้า — ก่อนวิกฤตหน้าตาเป็นยังไง วันนี้อยู่ตรงไหน"""
+    return jsonify(crisis.warning_signals())
 
 
 @api.get("/learn/links")

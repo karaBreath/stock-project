@@ -49,6 +49,7 @@ const NAV = [
   { id: 'analyze',   label: 'วิเคราะห์',  ic: '📈',  bottom: true  },
   { id: 'globe',     label: 'ลูกโลกข่าว', ic: '🌍',  bottom: false },
   { id: 'learn',     label: 'เครื่องเรียนรู้', ic: '🧠', bottom: false },
+  { id: 'crisis',    label: 'บทเรียนวิกฤต', ic: '⚠️',  bottom: false },
   { id: 'tools',     label: 'เครื่องมือ', ic: '🧰',  bottom: false },
   { id: 'report',    label: 'รายงานวันนี้',ic: '📰', bottom: false },
 ];
