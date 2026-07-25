@@ -146,13 +146,21 @@ routes.globe = async (app) => {
         .showAtmosphere(true)
         .atmosphereColor('#4dd4ff')
         .atmosphereAltitude(0.18)
-        .pointAltitude(d => Math.min(0.35, 0.02 + Math.log10(1 + d.count) * 0.06))
+        .pointAltitude(d => Math.min(0.14, 0.008 + Math.log10(1 + d.count) * 0.045))
         .pointColor(d => d.color)
-        .pointRadius(d => Math.min(1.1, 0.18 + Math.log10(1 + d.count) * 0.22))
+        .pointRadius(d => Math.min(0.42, 0.11 + Math.log10(1 + d.count) * 0.11))
         .pointLabel(d => `<div class="globe-tip"><b>${d.name || '—'}</b><br>${d.count} ข่าว</div>`)
-        .onPointClick(d => showPointNews(d));
+        .onPointClick(d => showPointNews(d))
+        // วงกระเพื่อมเน้นจุดที่ข่าวหนาแน่นที่สุด
+        .ringColor(d => () => d.color)
+        .ringMaxRadius(d => d.maxR)
+        .ringPropagationSpeed(1.6)
+        .ringRepeatPeriod(1400)
+        .ringAltitude(0.006);
       globe.controls().autoRotate = true;
       globe.controls().autoRotateSpeed = 0.45;
+      // เริ่มที่มุมมองเอเชียตะวันออกเฉียงใต้ + ซูมให้ลูกโลกเต็มกรอบ
+      globe.pointOfView({ lat: 14, lng: 100, altitude: 2.1 }, 0);
       sizeGlobe();
       window.addEventListener('resize', sizeGlobe);
       window._viewCleanup = () => {
@@ -161,14 +169,20 @@ routes.globe = async (app) => {
         globe = null;
       };
     }
-    globe.pointsData(pts.map(p => ({ ...p, lng: p.lon })));
+    const data = pts.map(p => ({ ...p, lng: p.lon }));
+    globe.pointsData(data);
+    // วงกระเพื่อมเฉพาะ 6 จุดที่ข่าวหนาแน่นสุด (มากกว่านี้จะรก)
+    globe.ringsData([...data].sort((a, b) => b.count - a.count).slice(0, 6)
+      .map(d => ({ ...d, maxR: 3.5 + Math.log10(1 + d.count) * 1.6 })));
   }
 
   function sizeGlobe() {
     const box = $('#globeBox');
     if (!box || !globe) return;
     const w = box.clientWidth || 600;
-    globe.width(w).height(Math.max(360, Math.min(520, Math.round(w * 0.72))));
+    // ให้ลูกโลกเต็มความสูงการ์ด (การ์ดถูกยืดตามแผง Tone ข้าง ๆ)
+    const h = Math.max(420, Math.min(660, box.clientHeight || Math.round(w * 0.72)));
+    globe.width(w).height(h);
   }
 
   // fallback เมื่อโหลด globe.gl ไม่ได้ (เช่น ออฟไลน์) — แสดงเป็นรายการจุดร้อน

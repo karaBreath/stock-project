@@ -88,9 +88,11 @@ def fear_greed():
 
 @api.get("/news")
 def news_ep():
+    # lang: auto (เลือกตามหุ้น) | th | en | both
     return jsonify(news.get_news(query=request.args.get("q", ""),
                                  ticker=request.args.get("ticker", ""),
-                                 limit=int(request.args.get("limit", 20))))
+                                 limit=int(request.args.get("limit", 20)),
+                                 lang=request.args.get("lang", "auto")))
 
 
 # ---------------- 5) Institutional / insider ----------------
@@ -315,6 +317,7 @@ def defaults():
     return jsonify({
         "th": Config.DEFAULT_TH_TICKERS,
         "us": Config.DEFAULT_US_TICKERS,
+        "funds": Config.DEFAULT_FUND_TICKERS,
         "line_configured": bool(Config.LINE_CHANNEL_TOKEN or Config.LINE_NOTIFY_TOKEN),
         "ai_mode": ai_advisory._mode(),
     })

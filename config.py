@@ -50,6 +50,17 @@ class Config:
         "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
         "TSLA", "META", "JPM", "XOM", "KO",
     ]
+    # กองทุน/ETF ยอดนิยม (ใช้ได้เหมือนหุ้นทุกฟีเจอร์ — ราคา กราฟ เทคนิคัล เครื่องเรียนรู้)
+    DEFAULT_FUND_TICKERS = [
+        "SPY",  # S&P 500
+        "QQQ",  # Nasdaq 100
+        "VOO",  # Vanguard S&P 500
+        "VTI",  # หุ้นสหรัฐทั้งตลาด
+        "VT",   # หุ้นทั่วโลก
+        "VWO",  # ตลาดเกิดใหม่
+        "GLD",  # ทองคำ
+        "TLT",  # พันธบัตรสหรัฐระยะยาว
+    ]
 
     # --- GDELT (ข่าวทั่วโลก 65 ภาษา · ฟรี ไม่ต้องใช้ API key) ---
     GDELT_BASE = os.environ.get("GDELT_BASE", "https://api.gdeltproject.org/api/v2")
