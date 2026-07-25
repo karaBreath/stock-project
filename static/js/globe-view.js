@@ -327,6 +327,9 @@ routes.learn = async (app, ticker) => {
       </div>
       <div class="card" style="margin-bottom:14px">
         <div class="card-title">ตารางความสัมพันธ์ (เรียงตามความแรง)</div>
+        <div class="small muted" style="margin-bottom:8px">
+          ✅ = ผ่านเกณฑ์กันผลบังเอิญ (|r| ≥ ${nf(res.critical_r, 3)}) · แถวจาง = ยังเชื่อไม่ได้
+        </div>
         ${linkTable(res.links || [])}
       </div>`;
     loadLearned();
@@ -336,15 +339,17 @@ routes.learn = async (app, ticker) => {
     if (!rows.length) return emptyState('🔍', 'ยังไม่พบความสัมพันธ์');
     return `<div class="table-scroll"><table class="tbl">
       <thead><tr>
-        <th>สัญญาณ</th><th>ล่วงหน้า</th><th>r</th><th>n</th><th>แม่น %</th><th>ระดับ</th>
+        <th>สัญญาณ</th><th>ล่วงหน้า</th><th>r</th><th>n</th><th>แม่น %</th><th>เชื่อได้?</th>
       </tr></thead><tbody>
-      ${rows.map(L => `<tr>
+      ${rows.map(L => `<tr style="${L.significant ? '' : 'opacity:.45'}">
         <td>${L.label}</td>
         <td>${L.lag === 0 ? 'วันเดียวกัน' : L.lag + ' วัน'}</td>
         <td class="mono ${cls(L.r)}">${nf(L.r, 3)}</td>
         <td class="mono">${L.n}</td>
         <td class="mono">${L.hit_rate === null || L.hit_rate === undefined ? '—' : nf(L.hit_rate, 1)}</td>
-        <td>${L.enough_data ? L.strength : '<span class="muted small">ข้อมูลยังน้อย</span>'}</td>
+        <td>${!L.enough_data ? '<span class="muted small">ข้อมูลน้อย</span>'
+              : L.significant ? `✅ ${L.strength}`
+              : '<span class="muted small">อาจบังเอิญ</span>'}</td>
       </tr>`).join('')}
       </tbody></table></div>`;
   }

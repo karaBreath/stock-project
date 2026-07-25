@@ -131,7 +131,7 @@ routes.dashboard = async (app) => {
   });
 
   // macro
-  api('/macro').then(m => {
+  api(`/macro?market=${currentMarket}`).then(m => {
     $('#macroBox').innerHTML = `<div class="grid cols-4">${m.items.map(it => `
       <div class="card ticker-card" style="padding:12px">
         <div class="nm">${it.label}</div>

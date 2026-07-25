@@ -7,10 +7,15 @@ from database import cache_get, cache_set
 from services import stock_data
 
 
-def get_macro() -> dict:
+def get_macro(market: str = "") -> dict:
+    """
+    ปัจจัยมหภาค — ถ้าระบุ market จะเรียงตัวที่สำคัญกับตลาดนั้นขึ้นก่อน
+      th -> SET, บาท, ทอง, น้ำมัน
+      us -> S&P, Nasdaq, VIX, บอนด์, DXY, เซมิคอนดักเตอร์
+    """
     cached = cache_get("macro:all")
     if cached:
-        return cached
+        return _focus(cached, market)
 
     items = []
     for key, (symbol, label) in Config.MACRO_SYMBOLS.items():
@@ -27,7 +32,18 @@ def get_macro() -> dict:
 
     result = {"items": items}
     cache_set("macro:all", result, Config.MACRO_CACHE_TTL)
-    return result
+    return _focus(result, market)
+
+
+def _focus(result: dict, market: str) -> dict:
+    """เรียงตัวชี้วัดที่สำคัญกับตลาดที่กำลังดูขึ้นก่อน"""
+    focus = Config.MACRO_FOCUS.get(market)
+    if not focus:
+        return result
+    order = {k: i for i, k in enumerate(focus)}
+    items = sorted(result.get("items", []),
+                   key=lambda x: order.get(x["key"], 99))
+    return {"items": items, "market": market, "focus": focus}
 
 
 def sector_performance(market="th") -> dict:

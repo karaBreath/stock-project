@@ -42,7 +42,7 @@ def generate(market="th", top_n=5) -> dict:
     top_avoid = [s for s in scored if s["total_score"] < 40][-top_n:]
 
     fg = sentiment_svc.fear_greed(market)
-    mac = macro.get_macro()
+    mac = macro.get_macro(market)
 
     # ---- บริบทข่าวโลกวันนี้ (ธีมที่ผิดปกติมากที่สุด) ----
     world = []

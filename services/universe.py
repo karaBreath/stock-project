@@ -83,13 +83,13 @@ SP500_STATIC = [
     # Healthcare
     "LLY","UNH","JNJ","ABBV","MRK","TMO","ABT","DHR","BMY","AMGN",
     "GILD","BIIB","VRTX","REGN","MRNA","BNTX","PFE","CVS","CI","HUM",
-    "MOH","CNC","ELV","HCA","THC","UHS","ENSG","AMED","AMEDISYS","AVEANNA",
-    "IQV","IQVIA","CRL","PH","WAT","A","BIO","IDXX","MTD","HOLX",
+    "MOH","CNC","ELV","HCA","THC","UHS","ENSG","AMED",
+    "IQV","CRL","PH","WAT","A","BIO","IDXX","MTD","HOLX",
     "DXCM","ISRG","SYK","ZBH","BSX","EW","MDT","BAX","BDX","COO",
     "TFX","TECH","ALGN","HSIC","XRAY","PDCO","PRGO","CTLT","RDUS","VTRS",
     # Consumer Discretionary
     "AMZN","TSLA","HD","MCD","NKE","LOW","TJX","BKNG","CMG","SBUX",
-    "YUM","QSR","DRI","DARDEN","RRGB","WING","SHAK","BROS","JACK","TXRH",
+    "YUM","QSR","DRI","RRGB","WING","SHAK","BROS","JACK","TXRH",
     "BBY","TGT","COST","WMT","DG","DLTR","FIVE","BIG","OLLI","BURL",
     "ROST","TJX","GPS","URBN","PVH","RL","MOV","CPRI","TPR","RH",
     "W","ETSY","EBAY","CHWY","FTCH","RENT","CPNG","SE","MELI","MKL",
@@ -98,7 +98,7 @@ SP500_STATIC = [
     "PG","KO","PEP","MDLZ","GIS","K","CPB","CAG","SJM","HRL",
     "MKC","SFLY","POST","BG","ADM","MOS","NTR","CF","FMC","ICL",
     "PM","MO","BTI","VGR","UVV","LO","CVET","SPB","CHD","CL",
-    "KMB","EL","COTY","REVG","REV","TPX","SEIC","SCSS","FLWS","1800",
+    "KMB","EL","COTY","REVG","REV","TPX","SEIC","SCSS","FLWS",
     # Energy
     "XOM","CVX","COP","EOG","SLB","MPC","VLO","PSX","OXY","DVN",
     "HAL","BKR","NOV","WHD","PUMP","PTEN","HP","PES","NE","VAL",
@@ -106,30 +106,30 @@ SP500_STATIC = [
     "APA","AR","EQT","RRC","SWN","COG","CNX","GPOR","REI","KRP",
     # Industrials
     "RTX","LMT","BA","GE","HON","MMM","CAT","DE","EMR","ETN",
-    "PH","ROK","AME","FTV","NDSN","GNRC","ITT","XYL","XYLEM","WTS",
+    "PH","ROK","AME","FTV","NDSN","GNRC","ITT","XYL","WTS",
     "FLOW","ESAB","GTLS","MIDD","AQUA","YORW","CWCO","SJW","AWR","AWK",
     "UPS","FDX","EXPD","CHRW","JBHT","KNX","SNDR","WERN","SAIA","ODFL",
     "XPO","GXO","ECHO","FWRD","HLXI","USX","ULH","MRTN","PTSI","CVLG",
     # Materials
     "LIN","APD","ECL","PPG","SHW","RPM","AXTA","HWKN","TREX","UFPI",
-    "WY","PCH","PotlatchDeltic","RYN","CW","NUE","STLD","CMC","RS","WIRE",
+    "WY","PCH","RYN","CW","NUE","STLD","CMC","RS","WIRE",
     "AOS","SMG","MATX","ATI","AA","CENX","ACH","HBM","FCX","NEM",
     "NUE","CLF","MT","X","PKX","VALE","RIO","BHP","SCCO","TECK",
     # Real Estate
     "AMT","PLD","EQIX","CCI","SBAC","DLR","PSA","EXR","CUBE","LSI",
     "SPG","SKT","MAC","KIM","REG","BRX","RPAI","ROIC","WRI","SITC",
-    "EQR","ESS","AVB","UDR","CPT","MAA","NNN","O","ADC","AGREE",
+    "EQR","ESS","AVB","UDR","CPT","MAA","NNN","O","ADC",
     "STAG","COLD","FR","TRNO","EGP","REXR","LXP","KITE","IIPR","MPW",
     # Utilities
     "NEE","DUK","SO","D","AEP","EXC","PCG","PG","SRE","XEL",
     "WEC","ES","AES","NI","CMS","ETR","PPL","FE","CNP","EVRG",
-    "OGE","MGEE","OTTR","IDACORP","POR","AVA","NWE","OTTER","UTL","CWCO",
+    "OGE","MGEE","OTTR","POR","AVA","NWE","UTL","CWCO",
     # Communication
     "GOOGL","META","NFLX","DIS","CHTR","CMCSA","T","VZ","TMUS","LUMN",
     "CTL","WBD","PARA","FOXA","FOX","NYT","GCI","NWSA","NWS","DISCA",
     # Small/Mid caps
     "IONQ","RGTI","QBTS","ARQQ","IQM","QUBT","FORM","QTWO","SMCI","WOLF",
-    "SOFI","AFRM","UPST","LC","OPEN","OFFERPAD","RDFN","ZILLOW","Z","ZG",
+    "SOFI","AFRM","UPST","LC","OPEN","RDFN","Z","ZG",
     "RBLX","U","MANU","NCTY","BILI","TME","HUYA","DOYU","JOYY","YY",
 ]
 

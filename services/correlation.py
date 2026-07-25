@@ -24,6 +24,8 @@ GDELT ให้ timeline ย้อนหลังได้ถึง 1 ปี แ
   จึงมีเกณฑ์ n ขั้นต่ำ + t-stat และแจ้งเตือนใน UI เสมอ
 """
 import datetime as dt
+import math
+from statistics import NormalDist
 
 import numpy as np
 
@@ -129,6 +131,24 @@ def _hit_rate(feat_vals, ret_vals, direction):
     return float(np.mean(wins) * 100)
 
 
+def _critical_r(n_samples: int, n_tests: int, alpha: float = 0.05) -> float:
+    """
+    เกณฑ์ |r| ขั้นต่ำที่จะถือว่า "ไม่ใช่ความบังเอิญ" เมื่อทดสอบ n_tests คู่พร้อมกัน
+
+    ใช้ Bonferroni: ยิ่งทดสอบหลายคู่ ยิ่งต้องเข้มขึ้น
+    เช่น ทดสอบ 80 คู่ ด้วยข้อมูล 150 วัน -> ต้องได้ |r| ≳ 0.28 ถึงจะเชื่อได้
+    (ถ้าใช้เกณฑ์หลวม ๆ 0.15 จะมีคู่ที่ "ดูใช่" โผล่มาเพราะบังเอิญราว 4 คู่)
+    """
+    if n_samples < 5 or n_tests < 1:
+        return 1.0
+    a = min(0.5, alpha / n_tests)
+    try:
+        z = NormalDist().inv_cdf(1 - a / 2)
+    except Exception:
+        z = 3.5
+    return min(0.99, z / math.sqrt(n_samples))
+
+
 def _strength(r, n, t):
     """แปลผลเป็นภาษาคน แบบระมัดระวัง"""
     if r is None or n < Config.LEARN_MIN_SAMPLES:
@@ -146,9 +166,17 @@ def _strength(r, n, t):
 # ---------------------------------------------------------------------------
 # วิเคราะห์หลัก
 # ---------------------------------------------------------------------------
-def default_features():
+def default_features(ticker: str = ""):
+    """
+    รายการสัญญาณที่จะเอามาทดสอบกับหุ้น 1 ตัว
+    หุ้น/กองทุนสหรัฐ กับหุ้นไทย สนใจปัจจัยมหภาคคนละชุด
+    """
     feats = [f"news:{k}" for k in Config.WORLD_THEMES]
-    feats += [f"macro:{k}" for k in ("gold", "oil", "usdthb", "us10y", "dxy")]
+    if (ticker or "").upper().endswith(".BK"):
+        macro = ("usdthb", "gold", "oil", "us10y", "dxy", "sp500")
+    else:
+        macro = ("vix", "us10y", "dxy", "nasdaq", "semis", "oil", "gold")
+    feats += [f"macro:{k}" for k in macro]
     return feats
 
 
@@ -159,7 +187,7 @@ def analyze(ticker: str, days: int = None, features=None, lags=None, save: bool 
     """
     ticker = stock_data.normalize_ticker(ticker)
     days = days or Config.LEARN_WINDOW_DAYS
-    features = features or default_features()
+    features = features or default_features(ticker)
     lags = lags or Config.LEARN_LAGS
 
     rets = _returns_series(ticker, days)
@@ -201,8 +229,16 @@ def analyze(ticker: str, days: int = None, features=None, lags=None, save: bool 
             if save:
                 _save_link(ticker, feat, lag, r, n, t, hit, days)
 
+    # ---- กันผลบังเอิญจากการทดสอบหลายคู่พร้อมกัน (Bonferroni) ----
+    n_tests = max(1, len(links))
+    for L in links:
+        crit = _critical_r(L["n"], n_tests)
+        L["critical_r"] = round(crit, 3)
+        L["significant"] = bool(L["enough_data"] and abs(L["r"]) >= crit)
+
     links.sort(key=lambda L: abs(L["r"]), reverse=True)
-    solid = [L for L in links if L["enough_data"] and abs(L["r"]) >= 0.15]
+    solid = [L for L in links if L["significant"]]
+    avg_crit = round(sum(L["critical_r"] for L in links) / n_tests, 3) if links else None
 
     return {
         "ok": True,
@@ -211,11 +247,15 @@ def analyze(ticker: str, days: int = None, features=None, lags=None, save: bool 
         "tested": len(links),
         "links": links[:40],
         "top": solid[:8],
+        "significant_count": len(solid),
+        "critical_r": avg_crit,
         "insights": _insights(ticker, solid),
         "min_samples": Config.LEARN_MIN_SAMPLES,
         "warning": (
-            "ความสัมพันธ์ ≠ สาเหตุ · ยิ่งทดสอบหลายคู่ยิ่งเจอเรื่องบังเอิญ "
-            f"(รอบนี้ทดสอบ {len(links)} คู่) — ใช้ประกอบการตัดสินใจเท่านั้น"
+            f"ทดสอบ {len(links)} คู่พร้อมกัน — ถ้าไม่แก้อะไรเลยจะมีคู่ที่ 'ดูใช่' "
+            f"โผล่มาเพราะบังเอิญราว {round(len(links) * 0.05)} คู่ "
+            f"จึงยกเกณฑ์เป็น |r| ≥ {avg_crit} (Bonferroni) เหลือผ่าน {len(solid)} คู่ · "
+            "ความสัมพันธ์ ≠ สาเหตุ ใช้ประกอบการตัดสินใจเท่านั้น"
         ),
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
     }
@@ -346,6 +386,7 @@ def learned(target: str = "", limit: int = 50) -> dict:
 # นำความรู้ที่เรียนได้ มาใช้กับ "ตอนนี้"  → ป้อนเข้าคะแนนรวม 0-100
 # ---------------------------------------------------------------------------
 CATALYST_MIN_R = 0.15      # ความสัมพันธ์อ่อนกว่านี้ไม่เอามาใช้
+CATALYST_MIN_T = 3.3       # กันผลบังเอิญจากการทดสอบ ~80 คู่ (Bonferroni)
 CATALYST_MAX_ADJUST = 10   # ปรับคะแนนรวมได้มากสุด ±10 คะแนน
 
 
@@ -360,15 +401,22 @@ def catalyst_signal(ticker: str) -> dict:
     คืน adjust = คะแนนที่ควรบวก/ลบจากคะแนนรวม (จำกัด ±10)
     """
     ticker = stock_data.normalize_ticker(ticker)
+    # เงื่อนไข: ข้อมูลพอ (n) + แรงพอ (|r|) + ผ่านเกณฑ์กันบังเอิญ (|t|) + นำราคาได้ (lag≥1)
     rows = query(
-        "SELECT * FROM correlations WHERE target=? AND n>=? AND ABS(r)>=? AND lag>=1 "
+        "SELECT * FROM correlations "
+        "WHERE target=? AND n>=? AND ABS(r)>=? AND ABS(COALESCE(t_stat,0))>=? AND lag>=1 "
         "ORDER BY ABS(r) DESC LIMIT 12",
-        (ticker, Config.LEARN_MIN_SAMPLES, CATALYST_MIN_R),
+        (ticker, Config.LEARN_MIN_SAMPLES, CATALYST_MIN_R, CATALYST_MIN_T),
     )
     if not rows:
+        learned_any = query("SELECT 1 FROM correlations WHERE target=? LIMIT 1",
+                            (ticker,), one=True)
         return {"ok": False, "ticker": ticker, "score": 50, "adjust": 0,
                 "reasons": [], "used": 0,
-                "hint": "ยังไม่ได้เรียนรู้หุ้นตัวนี้ — เปิดเมนูเครื่องเรียนรู้แล้วกดวิเคราะห์"}
+                "hint": ("เรียนรู้แล้ว แต่ยังไม่พบความสัมพันธ์ที่แรงพอจะเชื่อได้ "
+                         "— ไม่ปรับคะแนน (ดีกว่าเดาจากสัญญาณอ่อน)")
+                if learned_any else
+                "ยังไม่ได้เรียนรู้หุ้นตัวนี้ — เปิดเมนูเครื่องเรียนรู้แล้วกดวิเคราะห์"}
 
     # สภาพข่าวโลก ณ ตอนนี้ (deviation = ต่างจากค่าเฉลี่ย 7 วัน)
     signals = {r["key"]: r for r in gdelt.theme_signals(timespan="7d").get("rows", [])}

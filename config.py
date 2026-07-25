@@ -86,6 +86,9 @@ class Config:
                      '(stock market OR equities OR "bear market" OR "bull market" OR selloff)', "#63e6be"),
         "disaster": ("ภัยพิบัติ/โรคระบาด",
                      '(earthquake OR flood OR hurricane OR outbreak OR pandemic)', "#e599f7"),
+        "earnings": ("ผลประกอบการ",
+                     '(earnings beat OR earnings miss OR quarterly results OR guidance cut '
+                     'OR profit warning)', "#ff922b"),
         "thailand": ("ข่าวไทย",
                      '("Thailand economy" OR "Thai baht" OR "Thai stocks" OR Bangkok)', "#4dd4ff"),
     }
@@ -107,4 +110,15 @@ class Config:
         "set": ("^SET.BK", "SET Index"),
         "dxy": ("DX-Y.NYB", "ดัชนีดอลลาร์ (DXY)"),
         "btc": ("BTC-USD", "Bitcoin"),
+        # --- ตัวชี้วัดสำคัญสำหรับหุ้น/กองทุนสหรัฐ ---
+        "vix": ("^VIX", "VIX ดัชนีความกลัว"),
+        "nasdaq": ("^IXIC", "Nasdaq Composite"),
+        "semis": ("SOXX", "ดัชนีเซมิคอนดักเตอร์"),
+        "us2y": ("^FVX", "บอนด์สหรัฐ 5 ปี (%)"),
+    }
+
+    # ตัวชี้วัดที่แสดงเด่นในหน้าแรก แยกตามตลาดที่ดู
+    MACRO_FOCUS = {
+        "th": ["set", "usdthb", "gold", "oil", "us10y", "sp500"],
+        "us": ["sp500", "nasdaq", "vix", "us10y", "dxy", "semis"],
     }

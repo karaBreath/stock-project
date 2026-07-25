@@ -104,7 +104,7 @@ def institutional_ep(ticker):
 # ---------------- 6) Macro ----------------
 @api.get("/macro")
 def macro_ep():
-    return jsonify(macro.get_macro())
+    return jsonify(macro.get_macro(request.args.get("market", "")))
 
 
 # ---------------- 7) Sector ----------------
