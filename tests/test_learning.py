@@ -310,3 +310,80 @@ def test_crisis_never_reports_drawdown_without_data(synthetic_gfc):
     for c in r["crises"]:
         if c["covered"]:
             assert c["drawdown_pct"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 6) Volume Profile (ติดอาวุธจาก volume-edge)
+# ---------------------------------------------------------------------------
+def test_vp_finds_poc_and_value_area():
+    """
+    volume กระจุกที่ราคา ~100 -> POC ต้องอยู่ใกล้ 100
+    และ Value Area ต้องครอบ POC + กิน ~70% ของ volume
+    """
+    import pandas as pd
+    from services import volume_profile as VP
+
+    rng = np.random.default_rng(1)
+    rows = []
+    for _ in range(200):
+        c = 100 + rng.normal(0, 1.5)
+        h, l = c + abs(rng.normal(0, 0.5)), c - abs(rng.normal(0, 0.5))
+        v = 1000 + (500 if 98 < c < 102 else 0) + rng.integers(0, 200)
+        rows.append({"high": max(h, l), "low": min(h, l),
+                     "volume": float(v), "close": c, "open": c})
+    df = pd.DataFrame(rows)
+
+    centers, vol, lo, hi, _ = VP._distribute_volume(df, 60)
+    poc_idx = int(np.argmax(vol))
+    poc = centers[poc_idx]
+    val, vah = VP._value_area(centers, vol, poc_idx)
+
+    assert 98 < poc < 102, f"POC={poc} ไม่ใกล้ 100"
+    assert val < poc < vah
+    assert (vah - val) < (hi - lo)
+    mask = (centers >= val) & (centers <= vah)
+    pct = vol[mask].sum() / vol.sum()
+    assert 0.65 < pct < 0.80, f"Value Area กิน {pct:.0%} ไม่ใช่ ~70%"
+
+
+def test_vp_vab_levels_have_sane_risk_reward():
+    """VAB: stop ต้องอยู่ใต้จุดเบรก ไม่ลงลึกจน R:R แย่"""
+    from services import volume_profile as VP
+    lv = VP._levels("VAB", price=105, poc=100, val=97, vah=103,
+                    hvn=[108, 112], atr_val=2)
+    assert lv["stop_loss"] < lv["entry"] < lv["target"]
+    assert lv["target"] == 108           # เป้า = HVN แรกเหนือราคา
+    assert lv["risk_reward"] >= 0.9      # stop ใกล้จุดเบรก
+
+
+def test_vp_var_targets_poc():
+    """VAR: เป้าต้องเป็น POC และ stop ใต้ entry"""
+    from services import volume_profile as VP
+    lv = VP._levels("VAR", price=98, poc=100, val=97, vah=103, hvn=[], atr_val=2)
+    assert lv["target"] == 100           # POC
+    assert lv["stop_loss"] < lv["entry"]
+
+
+def test_vp_score_gate_rejects_lvn_and_bad_rr(monkeypatch):
+    """
+    ประตูความซื่อสัตย์: setup ที่ backtest ขาดทุน (LVN) หรือ R:R ต่ำ
+    ต้องไม่บวกคะแนน — บวกเฉพาะ setup ที่ผ่านทั้ง 3 ด่าน
+    """
+    from services import volume_profile as VP
+
+    monkeypatch.setattr(VP, "detect_setup", lambda t: {
+        "ok": True, "setup": "LVN", "levels": {"risk_reward": 3}})
+    assert VP._score_component("X")["adjust"] == 0        # LVN gated
+
+    monkeypatch.setattr(VP, "detect_setup", lambda t: {
+        "ok": True, "setup": "VAB", "levels": {"risk_reward": 0.8}})
+    assert VP._score_component("X")["adjust"] == 0        # R:R ต่ำ
+
+    monkeypatch.setattr(VP, "detect_setup", lambda t: {
+        "ok": True, "setup": "VAB", "levels": {"risk_reward": 2.5}})
+    adj = VP._score_component("X")["adjust"]
+    assert 4 <= adj <= 8                                  # ผ่าน -> บวกมีเพดาน
+
+    monkeypatch.setattr(VP, "detect_setup", lambda t: {
+        "ok": True, "setup": None, "evidence": "กลาง VA"})
+    assert VP._score_component("X")["adjust"] == 0        # ไม่มี setup

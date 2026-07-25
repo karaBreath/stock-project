@@ -3,7 +3,7 @@ Unified scoring — รวมคะแนนพื้นฐาน + เทคน
 พร้อมคำแนะนำ (ซื้อ/ถือ/ขาย) จุดเข้า จุดตัดขาดทุน และเป้าราคา
 """
 from services import (fundamental, technical, sentiment as sentiment_svc,
-                      stock_data, correlation)
+                      stock_data, correlation, volume_profile)
 
 
 # น้ำหนักของแต่ละด้าน (ปรับได้ง่ายในอนาคต)
@@ -38,8 +38,22 @@ def overall(ticker: str, deep: bool = True) -> dict:
         catalyst = correlation.catalyst_signal(ticker)
     except Exception:
         catalyst = {"ok": False, "adjust": 0, "reasons": []}
-    adjust = catalyst.get("adjust", 0) or 0
+    cat_adjust = catalyst.get("adjust", 0) or 0
 
+    # ---- ติดอาวุธ Volume Profile: setup VAB/VAR เพิ่มคะแนน (สูงสุด +8) ----
+    # ทำเฉพาะ deep=True (build_profile ต้องดึงราคา intraday) และเฉพาะหุ้น
+    # ที่เข้า setup จริง + ผ่าน 3 ประตู (ไม่ถูก gate / backtest บวก / R:R>=1.2)
+    if deep:
+        try:
+            vp = volume_profile._score_component(ticker)
+        except Exception:
+            vp = {"ok": False, "adjust": 0, "setup": None}
+    else:
+        vp = {"ok": False, "adjust": 0, "setup": None, "skipped": True}
+    vp_adjust = vp.get("adjust", 0) or 0
+
+    # รวมส่วนปรับทั้งหมด แต่จำกัดไม่ให้เกิน ±14 (กันคะแนนแกว่งเกินเหตุ)
+    adjust = max(-14, min(14, cat_adjust + vp_adjust))
     total = max(0, min(100, round(base + adjust)))
 
     if total >= 70:
@@ -53,8 +67,16 @@ def overall(ticker: str, deep: bool = True) -> dict:
     else:
         rec = "ขาย / หลีกเลี่ยง"
 
-    # ---- จุดเข้า/ตัดขาดทุน/เป้าราคา จาก ATR + แนวรับแนวต้าน ----
-    levels = _trade_levels(tech, fund)
+    # ---- จุดเข้า/ตัดขาดทุน/เป้าราคา ----
+    # ถ้ามี setup VP อยู่ ใช้จุดจากโครงสร้าง Volume Profile (แม่นกว่า ATR ล้วน)
+    # ไม่งั้นถอยไปใช้จุดจาก ATR + แนวรับแนวต้านแบบเดิม
+    vp_levels = (vp.get("levels") if vp.get("setup") else None)
+    if vp_levels and vp_levels.get("risk_reward"):
+        levels = dict(vp_levels)
+        levels["source"] = f"volume profile ({vp['setup']})"
+    else:
+        levels = _trade_levels(tech, fund)
+        levels["source"] = "atr"
 
     return {
         "ticker": ticker,
@@ -68,8 +90,11 @@ def overall(ticker: str, deep: bool = True) -> dict:
             "technical": t_score,
             "sentiment": s_score,
             "weights": WEIGHTS,
-            "catalyst_adjust": adjust,
+            "catalyst_adjust": cat_adjust,
+            "volume_adjust": vp_adjust,
+            "total_adjust": adjust,
         },
+        "volume_setup": vp,
         "catalyst": catalyst,
         "recommendation": rec,
         "levels": levels,

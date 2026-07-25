@@ -12,7 +12,7 @@ from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
     alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
-    selfcheck,
+    selfcheck, volume_profile,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -343,6 +343,19 @@ def learn_links_ep():
     """ความสัมพันธ์ทั้งหมดที่เรียนรู้เก็บไว้แล้ว"""
     return jsonify(correlation.learned(request.args.get("target", ""),
                                        int(request.args.get("limit", 50))))
+
+
+# ---------------- 19) Volume Profile (ติดอาวุธจาก volume-edge) ----------------
+@api.get("/volume-profile/<ticker>")
+def volume_profile_ep(ticker):
+    """Volume Profile: POC / Value Area / HVN / LVN + histogram สำหรับวาดกราฟ"""
+    return jsonify(volume_profile.build_profile(ticker))
+
+
+@api.get("/volume-setup/<ticker>")
+def volume_setup_ep(ticker):
+    """ดูว่าหุ้นตัวนี้เข้า setup VAB/VAR ตอนนี้ไหม + จุดเข้า/ตัดขาดทุน/เป้า + เหตุผลไทย"""
+    return jsonify(volume_profile.detect_setup(ticker))
 
 
 # ---------------- 18) ตรวจระบบ ----------------
