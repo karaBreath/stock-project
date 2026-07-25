@@ -323,6 +323,7 @@ routes.analyze = async (app, ticker) => {
       <div class="tab active" data-tab="overview">ภาพรวม</div>
       <div class="tab" data-tab="technical">เทคนิคัล</div>
       <div class="tab" data-tab="fundamental">พื้นฐาน</div>
+      <div class="tab" data-tab="volume">Volume Profile</div>
       <div class="tab" data-tab="news">ข่าว &amp; Sentiment</div>
       <div class="tab" data-tab="institutional">เงินสถาบัน</div>
     </div>
@@ -337,6 +338,7 @@ routes.analyze = async (app, ticker) => {
     if (tab === 'overview') renderOverview(body, score);
     if (tab === 'technical') renderTechnical(body, ticker);
     if (tab === 'fundamental') renderFundamental(body, ticker);
+    if (tab === 'volume') renderVolumeProfile(body, ticker);
     if (tab === 'news') renderNews(body, ticker);
     if (tab === 'institutional') renderInstitutional(body, ticker);
   }
@@ -453,6 +455,100 @@ async function renderInstitutional(body, ticker) {
     <div class="card"><div class="card-title">รายการ Insider <span class="pill ${insSum.bias==='ซื้อสุทธิ'?'buy':insSum.bias==='ขายสุทธิ'?'sell':'hold'}">${insSum.bias||'—'}</span></div>
       ${(d.insider||[]).length ? `<div class="table-scroll"><table class="tbl"><thead><tr><th>ผู้บริหาร</th><th>รายการ</th><th>หุ้น</th></tr></thead>
         <tbody>${d.insider.map(h=>`<tr><td>${(h.insider||'—')}<div class="muted small">${h.position||''}</div></td><td>${h.transaction||h.text||'—'}</td><td>${bigNum(h.shares)}</td></tr>`).join('')}</tbody></table></div>` : '<div class="muted small">ไม่มีข้อมูล insider</div>'}</div>
+  </div>`;
+}
+
+async function renderVolumeProfile(body, ticker) {
+  const s = await api('/volume-setup/' + encodeURIComponent(ticker));
+  if (!s.ok) { body.innerHTML = emptyState('📊', s.error || 'สร้าง Volume Profile ไม่ได้ (ข้อมูลราคาไม่พอ)'); return; }
+  const prof = s.profile || {};
+  const setup = s.setup;
+  const exp = s.expectancy;
+
+  // สีของกล่องสรุปตามสถานะ setup
+  const badge = setup
+    ? `<span class="pill buy">พบ setup ${setup}</span>`
+    : `<span class="pill hold">ยังไม่เข้า setup</span>`;
+
+  body.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">Volume Profile — ${ticker} ${badge}</div>
+      <div class="small muted" style="margin-bottom:10px">
+        composite ${prof.bars || '—'} แท่ง (${prof.interval || '—'}) ·
+        กระจาย volume ตามช่วงราคา = แม่นระดับโซน (ไม่มี tick data)
+      </div>
+      <div class="grid cols-3" style="gap:10px;margin-bottom:12px">
+        ${vpStat('POC (ราคาหนาแน่นสุด)', prof.poc, 'var(--neon-purple)')}
+        ${vpStat('ขอบบน Value Area (VAH)', prof.vah, 'var(--up)')}
+        ${vpStat('ขอบล่าง Value Area (VAL)', prof.val, 'var(--down)')}
+      </div>
+      <div id="vpChart" style="height:260px"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px;border-color:${setup?'var(--up)':'var(--stroke)'}">
+      <div class="card-title">สัญญาณ &amp; เหตุผล</div>
+      <div class="sig-item"><div>${s.evidence || '—'}</div></div>
+      ${!s.trend_ok ? `<div class="small muted" style="margin-top:6px">📉 ต่ำกว่า SMA200 (${nf(s.sma200)}) — ระบบเป็น long-only</div>` : ''}
+      ${setup && s.levels ? `
+        <div class="grid cols-4" style="margin-top:12px;gap:8px">
+          ${vpLevel('จุดเข้า', s.levels.entry, 'up')}
+          ${vpLevel('ตัดขาดทุน', s.levels.stop_loss, 'down')}
+          ${vpLevel('เป้า', s.levels.target, 'up')}
+          ${vpLevel('R:R', '1 : '+nf(s.levels.risk_reward,1), '')}
+        </div>` : ''}
+    </div>
+
+    ${exp ? `<div class="card">
+      <div class="card-title">ความจริงจาก backtest (ไม่โม้)</div>
+      <div class="small" style="line-height:1.7">
+        setup <b>${setup}</b> — ${exp.note}<br>
+        ผลตอบแทนคาดหวังนอกกลุ่มตัวอย่าง: <b class="${cls(exp.oos_r)}">${exp.oos_r>0?'+':''}${nf(exp.oos_r,3)}R/ไม้</b>
+        (จาก ${bigNum(exp.n)} ไม้)<br>
+        <span class="muted">⚠️ ตัวเลขนี้แทบเสมอตัว และในอดีตแพ้ถือ SPY เฉย ๆ —
+        VP ช่วยเรื่องวินัย จังหวะเข้า และจุด stop/target ไม่ใช่การันตีกำไร</span>
+      </div>
+    </div>` : ''}`;
+
+  drawVolumeProfile(prof, setup);
+}
+
+function vpStat(label, val, color) {
+  return `<div class="card" style="padding:12px">
+    <div class="small muted">${label}</div>
+    <div class="stat-big" style="font-size:22px;color:${color}">${nf(val)}</div></div>`;
+}
+function vpLevel(label, val, c) {
+  return `<div class="stat-row" style="flex-direction:column;align-items:flex-start;gap:2px">
+    <span class="small muted">${label}</span><span class="v ${c}" style="font-size:16px">${typeof val==='number'?nf(val):val}</span></div>`;
+}
+
+// วาด Volume Profile เป็นแท่งแนวนอน (histogram) + เส้น POC / Value Area
+function drawVolumeProfile(prof, setup) {
+  const el = document.getElementById('vpChart');
+  if (!el || !prof.histogram) return;
+  const hist = prof.histogram;
+  const maxV = Math.max(...hist.map(h => h.volume)) || 1;
+  const inVA = (p) => prof.val != null && prof.vah != null && p >= prof.val && p <= prof.vah;
+
+  // หา index ของแท่งที่ใกล้ POC / VAH / VAL ที่สุด (เพื่อป้ายไม่ซ้อนกัน)
+  const nearestIdx = (t) => t == null ? -1 :
+    hist.reduce((best, h, i) => Math.abs(h.price - t) < Math.abs(hist[best].price - t) ? i : best, 0);
+  const iPOC = nearestIdx(prof.poc), iVAH = nearestIdx(prof.vah), iVAL = nearestIdx(prof.val);
+  const labelFor = { [iPOC]: 'POC', [iVAH]: 'VAH', [iVAL]: 'VAL' };
+  const labelCol = { POC: 'var(--neon-purple)', VAH: 'var(--up)', VAL: 'var(--down)' };
+
+  // วาดด้วย HTML bar แนวนอน (เบา ไม่ต้องพึ่ง lib) — ราคาสูงอยู่บน
+  el.innerHTML = `<div style="display:flex;flex-direction:column-reverse;gap:1px;height:100%;justify-content:space-between">
+    ${hist.map((h, i) => {
+      const w = Math.max(2, h.volume / maxV * 100);
+      const tag = labelFor[i];
+      const col = i === iPOC ? 'var(--neon-purple)' : inVA(h.price) ? 'rgba(99,230,190,.55)' : 'rgba(120,130,255,.22)';
+      return `<div style="display:flex;align-items:center;gap:6px;height:${100/hist.length}%">
+        <div style="width:74px;text-align:right;font-size:9px;font-family:monospace;color:${tag?labelCol[tag]:'transparent'}">
+          ${tag ? tag+' '+nf(h.price,1) : nf(h.price,1)}</div>
+        <div style="height:100%;width:${w}%;background:${col};border-radius:2px" title="${nf(h.price,2)} · vol ${bigNum(h.volume)}"></div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 
