@@ -237,8 +237,9 @@ routes.learn = async (app, ticker) => {
             <label class="small muted">ช่วงข้อมูลย้อนหลัง (วัน)</label>
             <input id="lnDays" type="number" value="180" min="30" max="365" />
           </div>
-          <div style="display:flex;align-items:flex-end;gap:8px">
+          <div style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap">
             <button class="btn" id="lnRun">ค้นหาความสัมพันธ์</button>
+            <button class="btn ghost" id="lnAll">เรียนรู้ทั้ง watchlist</button>
             <button class="btn ghost" id="lnSnap">เก็บข้อมูลเดี๋ยวนี้</button>
           </div>
         </div>
@@ -262,6 +263,20 @@ routes.learn = async (app, ticker) => {
     const r = await api('/learn/snapshot', { method: 'POST' });
     toast(r.ok ? `เก็บแล้ว: ข่าว ${r.saved.news} · มหภาค ${r.saved.macro} · ราคา ${r.saved.price}` : 'เก็บไม่สำเร็จ');
     loadStatus();
+  };
+
+  $('#lnAll').onclick = async () => {
+    const btn = $('#lnAll');
+    btn.disabled = true;
+    btn.textContent = 'กำลังเรียนรู้…';
+    toast('กำลังเรียนรู้ทุกตัวใน watchlist (อาจใช้เวลาหลายนาที)', 6000);
+    const days = parseInt($('#lnDays').value || '180', 10);
+    const r = await api('/learn/watchlist', { method: 'POST', body: { days } });
+    btn.disabled = false;
+    btn.textContent = 'เรียนรู้ทั้ง watchlist';
+    toast(r.ok ? `เรียนรู้แล้ว ${r.count} ตัว — คะแนนรวมจะเริ่มใช้สัญญาณข่าวโลก` : 'เรียนรู้ไม่สำเร็จ', 5000);
+    loadStatus();
+    loadLearned();
   };
 
   if (ticker) runAnalyze();

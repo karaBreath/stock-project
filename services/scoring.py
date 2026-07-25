@@ -2,7 +2,8 @@
 Unified scoring — รวมคะแนนพื้นฐาน + เทคนิคัล + sentiment เป็นคะแนนรวม 0-100
 พร้อมคำแนะนำ (ซื้อ/ถือ/ขาย) จุดเข้า จุดตัดขาดทุน และเป้าราคา
 """
-from services import fundamental, technical, sentiment as sentiment_svc, stock_data
+from services import (fundamental, technical, sentiment as sentiment_svc,
+                      stock_data, correlation)
 
 
 # น้ำหนักของแต่ละด้าน (ปรับได้ง่ายในอนาคต)
@@ -18,12 +19,22 @@ def overall(ticker: str) -> dict:
     t_score = tech.get("tech_score", 50)
     s_score = senti.get("sentiment_score", 50)
 
-    total = round(
+    base = round(
         f_score * WEIGHTS["fundamental"]
         + t_score * WEIGHTS["technical"]
         + s_score * WEIGHTS["sentiment"]
     )
-    total = max(0, min(100, total))
+    base = max(0, min(100, base))
+
+    # ---- ปรับด้วยสัญญาณข่าวโลกที่ "เรียนรู้" มาแล้ว (สูงสุด ±10 คะแนน) ----
+    # ถ้ายังไม่เคยเรียนรู้หุ้นตัวนี้ adjust = 0 คะแนนจึงเท่าเดิมทุกประการ
+    try:
+        catalyst = correlation.catalyst_signal(ticker)
+    except Exception:
+        catalyst = {"ok": False, "adjust": 0, "reasons": []}
+    adjust = catalyst.get("adjust", 0) or 0
+
+    total = max(0, min(100, round(base + adjust)))
 
     if total >= 70:
         rec = "ซื้อ"
@@ -45,12 +56,15 @@ def overall(ticker: str) -> dict:
         "price": fund["quote"].get("price"),
         "currency": fund["quote"].get("currency"),
         "total_score": total,
+        "base_score": base,
         "breakdown": {
             "fundamental": f_score,
             "technical": t_score,
             "sentiment": s_score,
             "weights": WEIGHTS,
+            "catalyst_adjust": adjust,
         },
+        "catalyst": catalyst,
         "recommendation": rec,
         "levels": levels,
         "fundamental_notes": fund.get("verdict", []),

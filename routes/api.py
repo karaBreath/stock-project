@@ -287,6 +287,21 @@ def learn_analyze_ep(ticker):
     return jsonify(correlation.analyze(ticker, days=days))
 
 
+@api.get("/learn/catalyst/<ticker>")
+def learn_catalyst_ep(ticker):
+    """ข่าวโลกตอนนี้ กำลังหนุนหรือกดดันหุ้นตัวนี้ (จากความรู้ที่เรียนมา)"""
+    return jsonify(correlation.catalyst_signal(ticker))
+
+
+@api.post("/learn/watchlist")
+def learn_watchlist_ep():
+    """สั่งเรียนรู้หุ้นใน watchlist + พอร์ต ทีเดียวทั้งหมด"""
+    a = _args()
+    return jsonify(correlation.learn_watchlist(
+        days=int(a.get("days") or Config.LEARN_WINDOW_DAYS),
+        limit=int(a.get("limit") or 15)))
+
+
 @api.get("/learn/links")
 def learn_links_ep():
     """ความสัมพันธ์ทั้งหมดที่เรียนรู้เก็บไว้แล้ว"""

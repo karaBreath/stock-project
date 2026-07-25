@@ -306,6 +306,7 @@ routes.analyze = async (app, ticker) => {
       <div class="card">
         <div class="card-title">องค์ประกอบคะแนน</div>
         ${scoreBar('พื้นฐาน', b.fundamental)}${scoreBar('เทคนิคัล', b.technical)}${scoreBar('Sentiment', b.sentiment)}
+        ${catalystRow(score)}
       </div>
       <div class="card">
         <div class="card-title">แผนเทรด</div>
@@ -708,6 +709,24 @@ routes.report = async (app) => {
         <div class="card"><div class="card-title">ปัจจัยมหภาค</div>
           ${(r.macro||[]).map(m=>`<div class="stat-row"><span class="k">${m.label}</span><span class="v ${cls(m.change_pct)}">${nf(m.price)} (${pf(m.change_pct)})</span></div>`).join('')}</div>
       </div>
+      ${(r.world_news||[]).length ? `<div class="card" style="margin-bottom:16px">
+        <div class="card-title">🌍 ข่าวโลกที่ผิดปกติที่สุดวันนี้</div>
+        ${r.world_news.map(w=>`<div class="stat-row">
+          <span><span class="dot" style="background:${w.color}"></span>${w.label}</span>
+          <span class="v ${cls(w.deviation)}">${nf(w.tone,2)} <span class="small muted">(${w.deviation>0?'+':''}${nf(w.deviation,2)})</span></span>
+        </div>`).join('')}
+        <div class="small muted" style="margin-top:8px">Tone เทียบค่าเฉลี่ย 7 วัน · ติดลบ = ข่าวร้าย</div></div>` : ''}
+
+      ${(r.catalysts||[]).length ? `<div class="card" style="margin-bottom:16px">
+        <div class="card-title">🧠 หุ้นที่ข่าวโลกกำลังหนุน/กดดัน</div>
+        <div class="small muted" style="margin-bottom:8px">จากความสัมพันธ์ที่เครื่องเรียนรู้ไว้</div>
+        ${r.catalysts.map(c=>`<div class="ticker-card" data-t="${c.ticker}" style="cursor:pointer;padding:8px 0;border-bottom:1px solid var(--stroke)">
+          <div style="display:flex;justify-content:space-between;gap:8px">
+            <span><b class="mono">${c.ticker}</b> <span class="muted small">${(c.name||'').slice(0,20)}</span></span>
+            <span class="v ${cls(c.adjust)}">${c.adjust>0?'+':''}${nf(c.adjust,1)}</span></div>
+          ${(c.reasons||[]).map(t=>`<div class="small muted">· ${t}</div>`).join('')}
+        </div>`).join('')}</div>` : ''}
+
       <div class="card" style="margin-bottom:16px"><div class="card-title">⭐ หุ้นน่าสนใจวันนี้</div>
         ${(r.top_buys||[]).length ? r.top_buys.map(s=>repCard(s)).join('') : emptyState('🔍','ไม่มีหุ้นเข้าเกณฑ์วันนี้')}</div>
       ${(r.watch_avoid||[]).length ? `<div class="card"><div class="card-title">⚠️ ระวัง / คะแนนต่ำ</div>
@@ -742,6 +761,31 @@ function scoreBar(label, val) {
     <span class="muted">${label}</span><span class="v">${val}</span></div>
     <div class="bar-track"><div class="bar-fill" style="width:${val}%;background:${col}"></div></div></div>`;
 }
+// แถบ "ข่าวโลก" ในองค์ประกอบคะแนน — โชว์เฉพาะเมื่อเครื่องเรียนรู้หุ้นตัวนี้แล้ว
+function catalystRow(score) {
+  const c = score.catalyst || {};
+  const adj = (score.breakdown || {}).catalyst_adjust || 0;
+
+  if (!c.ok) {
+    return `<div class="small muted" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--stroke)">
+      🧠 ข่าวโลก: ยังไม่ได้เรียนรู้หุ้นตัวนี้
+      <a href="#learn/${encodeURIComponent(score.ticker)}">เรียนรู้เลย →</a></div>`;
+  }
+
+  const col = adj > 0 ? 'var(--up)' : adj < 0 ? 'var(--down)' : 'var(--muted)';
+  const sign = adj > 0 ? '+' : '';
+  return `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--stroke)">
+    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+      <span class="muted">🧠 ${c.label || 'ข่าวโลก'}</span>
+      <span class="v" style="color:${col}">${sign}${nf(adj, 1)} คะแนน</span>
+    </div>
+    <div class="small muted">ฐาน ${score.base_score} → รวม ${score.total_score}</div>
+    ${(c.reasons || []).map(r => `<div class="small" style="margin-top:6px">· ${r.text}</div>`).join('')}
+    <div class="small muted" style="margin-top:6px">
+      <a href="#learn/${encodeURIComponent(score.ticker)}">ดูรายละเอียดความสัมพันธ์ →</a></div>
+  </div>`;
+}
+
 function pickFin(obj, keys) {
   if (!obj) return null;
   for (const k of keys) for (const key in obj) if (key.toLowerCase() === k.toLowerCase()) return obj[key];

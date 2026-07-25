@@ -342,6 +342,137 @@ def learned(target: str = "", limit: int = 50) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# นำความรู้ที่เรียนได้ มาใช้กับ "ตอนนี้"  → ป้อนเข้าคะแนนรวม 0-100
+# ---------------------------------------------------------------------------
+CATALYST_MIN_R = 0.15      # ความสัมพันธ์อ่อนกว่านี้ไม่เอามาใช้
+CATALYST_MAX_ADJUST = 10   # ปรับคะแนนรวมได้มากสุด ±10 คะแนน
+
+
+def catalyst_signal(ticker: str) -> dict:
+    """
+    ดูว่า "ข่าวโลกตอนนี้" กำลังส่งสัญญาณอะไรกับหุ้นตัวนี้
+    โดยใช้เฉพาะความสัมพันธ์ที่เรียนรู้ไว้แล้วและผ่านเกณฑ์ (n พอ + |r| พอ + lag ≥ 1)
+
+    lag ≥ 1 เท่านั้น เพราะเราต้องการสัญญาณที่ "นำ" ราคา — ถ้า lag=0 คือ
+    ข่าวกับราคาขยับพร้อมกัน เอามาทำนายอนาคตไม่ได้
+
+    คืน adjust = คะแนนที่ควรบวก/ลบจากคะแนนรวม (จำกัด ±10)
+    """
+    ticker = stock_data.normalize_ticker(ticker)
+    rows = query(
+        "SELECT * FROM correlations WHERE target=? AND n>=? AND ABS(r)>=? AND lag>=1 "
+        "ORDER BY ABS(r) DESC LIMIT 12",
+        (ticker, Config.LEARN_MIN_SAMPLES, CATALYST_MIN_R),
+    )
+    if not rows:
+        return {"ok": False, "ticker": ticker, "score": 50, "adjust": 0,
+                "reasons": [], "used": 0,
+                "hint": "ยังไม่ได้เรียนรู้หุ้นตัวนี้ — เปิดเมนูเครื่องเรียนรู้แล้วกดวิเคราะห์"}
+
+    # สภาพข่าวโลก ณ ตอนนี้ (deviation = ต่างจากค่าเฉลี่ย 7 วัน)
+    signals = {r["key"]: r for r in gdelt.theme_signals(timespan="7d").get("rows", [])}
+
+    num = den = 0.0
+    reasons = []
+    used = 0
+
+    for row in rows:
+        feat = row["feature"]
+        dev = _current_deviation(feat, signals)
+        if dev is None:
+            continue
+        r = row["r"]
+        weight = abs(r)
+        contrib = r * dev              # ทิศทางที่คาดว่าราคาจะไป (-1..+1 คร่าว ๆ)
+        num += weight * contrib
+        den += weight
+        used += 1
+
+        if abs(contrib) >= 0.08:
+            direction = "หนุน" if contrib > 0 else "กดดัน"
+            state = "ดีขึ้น" if dev > 0 else "แย่ลง"
+            reasons.append({
+                "label": _feature_label(feat),
+                "state": state,
+                "effect": direction,
+                "lag": row["lag"],
+                "r": round(r, 3),
+                "n": row["n"],
+                "contribution": round(contrib, 3),
+                "text": (f"{_feature_label(feat)} {state} → {direction} {ticker} "
+                         f"อีก {row['lag']} วัน (r={round(r, 3)}, n={row['n']})"),
+            })
+
+    if not den:
+        return {"ok": False, "ticker": ticker, "score": 50, "adjust": 0,
+                "reasons": [], "used": 0,
+                "hint": "ยังดึงสภาพข่าวโลกตอนนี้ไม่ได้"}
+
+    expected = num / den                                   # -1..+1
+    expected = max(-1.0, min(1.0, expected))
+    adjust = round(expected * CATALYST_MAX_ADJUST, 1)
+    score = int(max(0, min(100, round(50 + expected * 50))))
+
+    reasons.sort(key=lambda x: abs(x["contribution"]), reverse=True)
+    return {
+        "ok": True,
+        "ticker": ticker,
+        "score": score,
+        "adjust": adjust,
+        "expected": round(expected, 3),
+        "used": used,
+        "reasons": reasons[:4],
+        "label": ("ข่าวโลกหนุน" if adjust >= 2 else
+                  "ข่าวโลกกดดัน" if adjust <= -2 else "ข่าวโลกเป็นกลาง"),
+    }
+
+
+def _current_deviation(feature: str, signals: dict):
+    """
+    สภาพปัจจุบันของ feature เทียบค่าปกติ → normalize เป็นราว -1..+1
+      news:<theme> ใช้ tone เทียบค่าเฉลี่ย 7 วัน
+      macro:<key>  ใช้ % เปลี่ยนแปลงวันนี้
+    """
+    if feature.startswith("news:"):
+        key = feature.split(":", 1)[1]
+        row = signals.get(key)
+        if not row or row.get("deviation") is None:
+            return None
+        return max(-1.0, min(1.0, row["deviation"] / 1.5))
+
+    if feature.startswith("macro:"):
+        key = feature.split(":", 1)[1]
+        sym = (Config.MACRO_SYMBOLS.get(key) or (None,))[0]
+        if not sym:
+            return None
+        q = stock_data.get_quote(sym)
+        chg = q.get("change_pct")
+        if chg is None:
+            return None
+        return max(-1.0, min(1.0, chg / 2.0))
+
+    return None
+
+
+def learn_watchlist(days: int = None, limit: int = 15) -> dict:
+    """
+    สั่งให้เครื่องเรียนรู้หุ้นใน watchlist + พอร์ต ทีเดียวทั้งหมด
+    (ใช้ตอนเริ่มต้น เพื่อให้คะแนนรวมมีข้อมูลข่าวโลกใช้ทันที)
+    """
+    days = days or Config.LEARN_WINDOW_DAYS
+    tickers = _tracked_tickers(limit)
+    done = []
+    for t in tickers:
+        try:
+            res = analyze(t, days=days)
+            done.append({"ticker": t, "ok": res.get("ok", False),
+                         "found": len(res.get("top", []))})
+        except Exception as e:
+            done.append({"ticker": t, "ok": False, "error": str(e)})
+    return {"ok": True, "learned": done, "count": len(done), "stats": obs_stats()}
+
+
 def status() -> dict:
     """สถานะคลังข้อมูล — ใช้โชว์ว่า 'เก็บมาแล้วเท่าไหร่'"""
     st = obs_stats()
