@@ -64,12 +64,16 @@ def _feature_series(feature: str, days: int) -> dict:
       'obs:<kind>:<key>' -> ข้อมูลที่สะสมไว้เองในตาราง observations
     """
     if feature.startswith("news:"):
-        q = gdelt.theme_query(feature.split(":", 1)[1])
-        return gdelt.tone_timeline(q, timespan=f"{days}d").get("series", {}) if q else {}
+        key = feature.split(":", 1)[1]
+        q = gdelt.theme_query(key)
+        live = gdelt.tone_timeline(q, timespan=f"{days}d").get("series", {}) if q else {}
+        return _merge_with_stored(live, "news", key, days)
 
     if feature.startswith("volume:"):
-        q = gdelt.theme_query(feature.split(":", 1)[1])
-        return gdelt.volume_timeline(q, timespan=f"{days}d").get("series", {}) if q else {}
+        key = feature.split(":", 1)[1]
+        q = gdelt.theme_query(key)
+        live = gdelt.volume_timeline(q, timespan=f"{days}d").get("series", {}) if q else {}
+        return _merge_with_stored(live, "newsvol", key, days)
 
     if feature.startswith("macro:"):
         key = feature.split(":", 1)[1]
@@ -83,6 +87,26 @@ def _feature_series(feature: str, days: int) -> dict:
             return obs_series(parts[1], parts[2], since_day=since)
 
     return {}
+
+
+def _merge_with_stored(live: dict, kind: str, key: str, days: int) -> dict:
+    """
+    รวมข่าวสด (GDELT ย้อนได้ ~90 วัน) กับข่าวที่แอปเก็บสะสมเองในตาราง observations
+
+    นี่คือหัวใจของ "ถ้าเราเก็บไว้มากพอ" — GDELT ให้ย้อนหลังจำกัด แต่ทุกวันที่
+    แอปรัน มันบันทึกสภาพข่าวโลกของวันนั้นไว้เอง คลังจึงยาวขึ้นเรื่อย ๆ
+    เกินกว่าที่ GDELT ให้ได้ ค่าจาก GDELT ถือว่าแม่นกว่าจึงทับค่าที่เก็บไว้
+    """
+    since = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+    try:
+        stored = obs_series(kind, key, since_day=since) or {}
+    except Exception:
+        stored = {}
+    if not stored:
+        return live
+    merged = dict(stored)
+    merged.update(live or {})
+    return merged
 
 
 def _shift_days(day: str, n: int) -> str:
@@ -344,7 +368,7 @@ def snapshot() -> dict:
     เรียกได้บ่อยเท่าไหร่ก็ได้ — ข้อมูลวันเดียวกันจะทับของเดิม
     """
     day = _today()
-    saved = {"news": 0, "macro": 0, "price": 0}
+    saved = {"news": 0, "newsvol": 0, "macro": 0, "price": 0}
 
     # 1) tone ข่าวโลกรายธีม
     sig = gdelt.theme_signals(timespan="7d")
@@ -352,6 +376,18 @@ def snapshot() -> dict:
         if row.get("tone") is not None:
             obs_upsert(day, "news", row["key"], row["tone"], {"label": row["label"]})
             saved["news"] += 1
+
+    # 1b) ปริมาณข่าวรายธีม — เก็บไว้เองเพราะ GDELT ย้อนหลังให้แค่ ~90 วัน
+    #     ยิ่งแอปรันนาน คลังยิ่งยาวกว่าที่ GDELT ให้ได้
+    for key in Config.WORLD_THEMES:
+        q = gdelt.theme_query(key)
+        if not q:
+            continue
+        ser = gdelt.volume_timeline(q, timespan="7d").get("series") or {}
+        if ser:
+            latest_day = max(ser)
+            obs_upsert(day, "newsvol", key, ser[latest_day], {"from_day": latest_day})
+            saved["newsvol"] += 1
 
     # 2) ปัจจัยมหภาค
     for key, (symbol, label) in Config.MACRO_SYMBOLS.items():
@@ -367,6 +403,19 @@ def snapshot() -> dict:
         if q.get("ok") and q.get("price") is not None:
             obs_upsert(day, "price", t, q["price"], {"change_pct": q.get("change_pct")})
             saved["price"] += 1
+
+    # 4) อุ่น cache จุดข่าวบนลูกโลกไว้ล่วงหน้า (ผู้ใช้จะได้ไม่ต้องรอ GDELT ตอนเปิดหน้า)
+    try:
+        saved["globe"] = gdelt.warm_cache(timespan="24h")
+    except Exception as e:
+        saved["globe"] = {"error": str(e)[:120]}
+
+    # 5) ทยอยดึงข่าวย้อนหลังทีละช่วง 85 วัน มาเก็บสะสม
+    #    GDELT ให้ทีเดียวได้แค่ ~90 วัน แต่ถ้าแบ่งยิงแล้วเก็บไว้ คลังจะยาวขึ้นทุกชั่วโมง
+    try:
+        saved["backfill"] = gdelt.backfill(days=Config.LEARN_BACKFILL_DAYS)
+    except Exception as e:
+        saved["backfill"] = {"error": str(e)[:120]}
 
     return {"ok": True, "day": day, "saved": saved, "stats": obs_stats()}
 

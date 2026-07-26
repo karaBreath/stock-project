@@ -12,10 +12,13 @@ Tone คือคะแนนอารมณ์ข่าวที่ GDELT ค�
 """
 import re
 import datetime as dt
+import threading
+import time
 import urllib.parse
 
 from config import Config
 from database import cache_get, cache_set
+from services import country_geo
 
 try:
     import requests
@@ -27,30 +30,88 @@ except Exception:  # pragma: no cover
 
 _UA = "NEBULA-Stock-App/1.0 (educational stock research)"
 
+# เพดาน timespan ที่ GDELT ยอมรับจริง (ทดสอบจากเซิร์ฟเวอร์จริง)
+#   30d / 90d / 3m -> HTTP 200
+#   100d / 120d / 180d / 365d / 540d / 18m -> HTTP 429 "query too large"
+# ถ้าขอยาวกว่านี้จะไม่ได้ข้อมูลเลย ไม่ใช่ได้ข้อมูลน้อยลง
+MAX_TIMESPAN_DAYS = 90
+
+# GDELT จำกัดอัตราการเรียกต่อ IP ค่อนข้างแรง (เจอ 429 บ่อยจากเซิร์ฟเวอร์ cloud)
+# จึงบังคับเว้นจังหวะระหว่างการเรียกทุกครั้ง + พักยาวเมื่อโดน 429 ติด ๆ กัน
+_MIN_GAP_SEC = 1.2
+_COOLDOWN_SEC = 45
+_rate_lock = threading.Lock()
+_last_call = [0.0]
+_cooldown_until = [0.0]
+
+
+def _clamp_timespan(timespan: str) -> str:
+    """
+    ตัด timespan ให้ไม่เกินเพดานที่ GDELT รับได้
+    รองรับรูปแบบ '540d', '18m', '2y', '24h' (ชั่วโมงปล่อยผ่าน)
+    """
+    s = (timespan or "").strip().lower()
+    if not s:
+        return f"{MAX_TIMESPAN_DAYS}d"
+    unit, num = s[-1], s[:-1]
+    if unit == "h":
+        return s
+    try:
+        n = float(num)
+    except ValueError:
+        return f"{MAX_TIMESPAN_DAYS}d"
+    days = {"d": n, "w": n * 7, "m": n * 30, "y": n * 365}.get(unit)
+    if days is None:
+        return f"{MAX_TIMESPAN_DAYS}d"
+    return f"{int(min(days, MAX_TIMESPAN_DAYS))}d"
+
+
+def _throttle():
+    """เว้นจังหวะก่อนยิง GDELT · ถ้าเพิ่งโดน 429 จะบอกให้ข้ามไปเลย"""
+    with _rate_lock:
+        now = time.time()
+        if now < _cooldown_until[0]:
+            return False
+        wait = _MIN_GAP_SEC - (now - _last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call[0] = time.time()
+        return True
+
 
 # ---------------------------------------------------------------------------
 # low-level fetch
 # ---------------------------------------------------------------------------
-def _fetch_json(path: str, params: dict, retries: int = 1):
+def _fetch_json(path: str, params: dict, retries: int = 2):
     """
     เรียก GDELT แล้วคืน dict; คืน None ถ้าล้มเหลว (GDELT บางทีตอบ text ไม่ใช่ json)
-    GDELT throttle ต่อ IP ค่อนข้างแรง (โดยเฉพาะ IP ของ cloud ที่ใช้ร่วมกันหลายคน)
-    จึงลองซ้ำ 1 ครั้งแบบเว้นจังหวะ ก่อนยอมแพ้
+
+    จัดการ 2 เรื่องที่เจอจริงบนเซิร์ฟเวอร์:
+      - HTTP 429 (โดนจำกัดอัตรา หรือ query หนักเกิน) -> ถอยแล้วลองใหม่แบบเว้นนานขึ้น
+      - timespan ยาวเกินเพดาน -> ตัดให้เหลือ MAX_TIMESPAN_DAYS ก่อนยิง
     """
     if not _REQ_OK:
         return None
+    params = dict(params)
+    if params.get("timespan"):
+        params["timespan"] = _clamp_timespan(str(params["timespan"]))
+
     url = f"{Config.GDELT_BASE}/{path}"
     for attempt in range(retries + 1):
+        if not _throttle():
+            return None                     # อยู่ในช่วงพักหลังโดน 429 — อย่าซ้ำเติม
         try:
             r = requests.get(url, params=params, timeout=Config.GDELT_TIMEOUT,
                              headers={"User-Agent": _UA})
             if r.status_code == 200 and r.text.strip():
                 return r.json()
+            if r.status_code == 429 and attempt == retries:
+                with _rate_lock:            # โดนซ้ำจนหมดโควตาลอง -> พักยาว
+                    _cooldown_until[0] = time.time() + _COOLDOWN_SEC
         except Exception:
             pass
         if attempt < retries:
-            import time
-            time.sleep(2.0)
+            time.sleep(3.0 * (attempt + 1))
     return None
 
 
@@ -68,7 +129,13 @@ def _day_of(stamp: str) -> str:
 def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dict:
     """
     คืนจุดข่าวพร้อมพิกัดสำหรับปักบนลูกโลก
-    ถ้าไม่ระบุ query จะใช้ query ของ theme (จาก Config.WORLD_THEMES)
+
+    ⚠️ GDELT ปิด GEO 2.0 API แล้ว (api/v2/geo/geo -> HTTP 404 ทุกแบบ
+    ยืนยันจากการทดสอบจริง 6 ครั้ง) จึงเปลี่ยนมาใช้ DOC 2.0 ArtList ที่ยังทำงานได้
+    แล้วนับข่าว "รายประเทศต้นทาง" (sourcecountry) วางจุดที่พิกัดกลางของประเทศนั้น
+
+    ผลที่ได้หยาบกว่าเดิม (ระดับประเทศ ไม่ใช่ระดับเมือง) แต่ยังตอบโจทย์เดิมคือ
+    เห็นว่าเรื่องไหนกำลังร้อนอยู่ที่ไหนบนโลก
     """
     color = "#4dd4ff"
     label = "ข่าวทั่วโลก"
@@ -77,54 +144,69 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
         query = query or q
     query = query or "stock market OR economy"
 
-    cache_key = f"gdelt:geo:{theme}:{query}:{timespan}"
+    cache_key = f"gdelt:geo2:{theme}:{query}:{timespan}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
     out = {"theme": theme, "label": label, "color": color, "query": query,
-           "timespan": timespan, "points": [], "ok": False}
+           "timespan": timespan, "points": [], "ok": False, "source": "artlist-country"}
 
-    data = _fetch_json("geo/geo", {
+    data = _fetch_json("doc/doc", {
         "query": query,
-        "format": "GeoJSON",
-        "mode": "PointData",
+        "mode": "ArtList",
+        "format": "json",
+        "maxrecords": 250,
         "timespan": timespan,
-        "maxpoints": Config.GDELT_MAX_POINTS,
+        "sort": "DateDesc",
     })
 
-    if not data or not isinstance(data, dict):
-        out["error"] = "ดึงข้อมูล GDELT ไม่ได้ (network หรือ rate limit)"
+    arts = (data or {}).get("articles") or []
+    if not arts:
+        out["error"] = "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)"
         return out
 
-    for f in (data.get("features") or []):
-        try:
-            geom = f.get("geometry") or {}
-            coords = geom.get("coordinates") or []
-            if len(coords) < 2:
-                continue
-            lon, lat = float(coords[0]), float(coords[1])
-            props = f.get("properties") or {}
-            try:
-                count = int(float(props.get("count", 1) or 1))
-            except (TypeError, ValueError):
-                count = 1
-            out["points"].append({
-                "lat": lat,
-                "lon": lon,
-                "name": props.get("name") or "",
-                "count": count,
-                "color": color,
-                "articles": _links_from_html(props.get("html", ""))[:5],
-            })
-        except (TypeError, ValueError):
-            continue
-
+    out["points"] = _points_from_articles(arts, color, theme)
     out["ok"] = bool(out["points"])
     out["total"] = len(out["points"])
+    out["articles_seen"] = len(arts)
     if out["ok"]:
         cache_set(cache_key, out, Config.GDELT_CACHE_TTL)
     return out
+
+
+def _points_from_articles(arts, color: str, theme: str = "") -> list:
+    """รวมข่าวเป็นจุดรายประเทศ + เก็บลิงก์ข่าวตัวอย่างไว้ให้คลิกดู"""
+    # เลื่อนจุดของแต่ละธีมเล็กน้อย เพื่อไม่ให้แท่งของหลายธีมทับกันสนิท
+    seed = sum(ord(c) for c in (theme or "x"))
+    off_lat = ((seed % 7) - 3) * 0.55
+    off_lon = ((seed % 11) - 5) * 0.55
+
+    buckets = {}
+    for a in arts:
+        country = (a.get("sourcecountry") or "").strip()
+        pos = country_geo.coords_for(country)
+        if not pos:
+            continue
+        b = buckets.setdefault(country, {"count": 0, "articles": []})
+        b["count"] += 1
+        if len(b["articles"]) < 5 and a.get("url"):
+            b["articles"].append({"title": (a.get("title") or "")[:160],
+                                  "url": a.get("url")})
+
+    points = []
+    for country, b in buckets.items():
+        lat, lon = country_geo.coords_for(country)
+        points.append({
+            "lat": round(lat + off_lat, 4),
+            "lon": round(lon + off_lon, 4),
+            "name": country,
+            "count": b["count"],
+            "color": color,
+            "articles": b["articles"],
+        })
+    points.sort(key=lambda p: p["count"], reverse=True)
+    return points[:Config.GDELT_MAX_POINTS]
 
 
 _A_RE = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
@@ -142,11 +224,20 @@ def _links_from_html(html: str):
 
 
 def all_theme_points(timespan: str = "24h") -> dict:
-    """ดึงจุดข่าวของทุกธีมรวมกัน (ใช้ตอนเปิดหน้าลูกโลกครั้งแรก)"""
+    """
+    ดึงจุดข่าวของทุกธีมรวมกัน (ใช้ตอนเปิดหน้าลูกโลก)
+
+    ทุกธีม = 1 คำขอต่อ GDELT ซึ่งช้า (~10 วิ) และมีโควตาจำกัด
+    จึงคืนเท่าที่ได้เสมอ ธีมไหนโดนจำกัดอัตราก็ข้ามไป (ไม่ทำให้ทั้งหน้าพัง)
+    ตัวเก็บข้อมูลเบื้องหลังจะอุ่น cache ไว้ให้ ผู้ใช้ส่วนใหญ่จึงเจอของที่พร้อมแล้ว
+    """
     themes = []
     points = []
+    skipped = 0
     for key in Config.WORLD_THEMES:
         res = world_points(theme=key, timespan=timespan)
+        if not res.get("ok"):
+            skipped += 1
         themes.append({
             "key": key,
             "label": res["label"],
@@ -157,57 +248,49 @@ def all_theme_points(timespan: str = "24h") -> dict:
         for p in res["points"]:
             p["theme"] = key
             points.append(p)
-    return {"themes": themes, "points": points, "timespan": timespan,
-            "ok": bool(points),
-            "fetched_at": dt.datetime.now().isoformat(timespec="seconds")}
+    out = {"themes": themes, "points": points, "timespan": timespan,
+           "ok": bool(points), "skipped_themes": skipped,
+           "fetched_at": dt.datetime.now().isoformat(timespec="seconds")}
+    if skipped:
+        out["note"] = (f"{skipped} ธีมยังดึงไม่ได้ (GDELT จำกัดอัตราการเรียก) "
+                       "— ลองใหม่อีกครั้งในอีกสักครู่")
+    return out
+
+
+def warm_cache(timespan: str = "24h") -> dict:
+    """อุ่น cache จุดข่าวไว้ล่วงหน้า — เรียกจากเธรดเบื้องหลัง ไม่ให้ผู้ใช้ต้องรอ"""
+    res = all_theme_points(timespan=timespan)
+    return {"points": len(res.get("points", [])),
+            "skipped": res.get("skipped_themes", 0)}
 
 
 # ---------------------------------------------------------------------------
 # 2) Timeline ของ Tone — หัวใจของเครื่องเรียนรู้ (ย้อนหลังได้ถึง 1 ปี)
 # ---------------------------------------------------------------------------
-def tone_timeline(query: str, timespan: str = "180d") -> dict:
-    """
-    คืน {day: average_tone} รายวัน
-    จุดสำคัญ: GDELT ให้ข้อมูล "ย้อนหลัง" ได้ทันที ทำให้หาความสัมพันธ์ได้ตั้งแต่วันแรก
-    ไม่ต้องรอสะสมข้อมูลเป็นเดือน
-    """
-    cache_key = f"gdelt:tone:{query}:{timespan}"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
-
-    out = {"query": query, "timespan": timespan, "series": {}, "ok": False}
-    data = _fetch_json("doc/doc", {
-        "query": query,
-        "mode": "TimelineTone",
-        "format": "json",
-        "timespan": timespan,
-    })
-    series = _parse_timeline(data)
-    if series:
-        out["series"] = series
-        out["ok"] = True
-        cache_set(cache_key, out, Config.GDELT_TIMELINE_CACHE_TTL)
-    else:
-        out["error"] = "ดึง timeline จาก GDELT ไม่ได้"
-    return out
+def tone_timeline(query: str, timespan: str = "90d") -> dict:
+    """คืน {day: average_tone} รายวัน (ยาวเกิน 90 วันจะแบ่งยิงเป็นช่วง ๆ ให้เอง)"""
+    return _timeline(query, "TimelineTone", timespan, "tone")
 
 
-def volume_timeline(query: str, timespan: str = "180d") -> dict:
+def volume_timeline(query: str, timespan: str = "90d") -> dict:
     """คืน {day: volume%} — ปริมาณข่าว (สัดส่วนของข่าวทั้งโลกที่พูดเรื่องนี้)"""
-    cache_key = f"gdelt:vol:{query}:{timespan}"
+    return _timeline(query, "TimelineVol", timespan, "vol")
+
+
+def _timeline(query: str, mode: str, timespan: str, tag: str) -> dict:
+    days = _days_of(timespan)
+    if days is not None and days > MAX_TIMESPAN_DAYS:
+        return _chunked_timeline(query, mode, days, tag)
+
+    span = _clamp_timespan(timespan)
+    cache_key = f"gdelt:{tag}:{query}:{span}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
-    out = {"query": query, "timespan": timespan, "series": {}, "ok": False}
-    data = _fetch_json("doc/doc", {
-        "query": query,
-        "mode": "TimelineVol",
-        "format": "json",
-        "timespan": timespan,
-    })
-    series = _parse_timeline(data)
+    out = {"query": query, "timespan": span, "series": {}, "ok": False}
+    series = _parse_timeline(_fetch_json("doc/doc", {
+        "query": query, "mode": mode, "format": "json", "timespan": span}))
     if series:
         out["series"] = series
         out["ok"] = True
@@ -215,6 +298,114 @@ def volume_timeline(query: str, timespan: str = "180d") -> dict:
     else:
         out["error"] = "ดึง timeline จาก GDELT ไม่ได้"
     return out
+
+
+# ---------------------------------------------------------------------------
+# แบ่งยิงทีละช่วง แล้วสะสมไว้ — ทะลุเพดาน 90 วันของ GDELT
+# ---------------------------------------------------------------------------
+CHUNK_DAYS = 85            # เผื่อขอบ ไม่ให้ชนเพดาน 90 วันพอดี
+CHUNK_CACHE_TTL = 60 * 60 * 24 * 60   # ช่วงที่ผ่านไปแล้วไม่เปลี่ยนอีก เก็บยาว 60 วัน
+MAX_NEW_CHUNKS_PER_CALL = 2           # ต่อ 1 คำขอ ดึงของใหม่ไม่เกินเท่านี้ (กันช้า/โดนบล็อก)
+
+
+def _days_of(timespan: str):
+    """แปลง '540d' / '18m' / '2y' เป็นจำนวนวัน · คืน None ถ้าเป็นชั่วโมงหรืออ่านไม่ออก"""
+    s = (timespan or "").strip().lower()
+    if not s or s[-1] == "h":
+        return None
+    try:
+        n = float(s[:-1])
+    except ValueError:
+        return None
+    per_unit = {"d": n, "w": n * 7, "m": n * 30, "y": n * 365}.get(s[-1])
+    return int(per_unit) if per_unit is not None else None
+
+
+def _stamp(d: dt.date) -> str:
+    return d.strftime("%Y%m%d") + "000000"
+
+
+def _chunk_ranges(days: int):
+    """แบ่งช่วงเวลาย้อนหลังเป็นก้อนละ CHUNK_DAYS วัน เริ่มจากก้อนล่าสุดก่อน"""
+    today = dt.date.today()
+    out = []
+    covered = 0
+    while covered < days:
+        end = today - dt.timedelta(days=covered)
+        span = min(CHUNK_DAYS, days - covered)
+        start = end - dt.timedelta(days=span)
+        out.append((start, end))
+        covered += span
+    return out
+
+
+def _chunked_timeline(query: str, mode: str, days: int, tag: str) -> dict:
+    """
+    ยิงทีละช่วง 85 วัน ย้อนหลังไปเรื่อย ๆ แล้วรวมกัน
+
+    ช่วงที่ดึงมาแล้วจะถูกเก็บไว้ (ข้อมูลอดีตไม่เปลี่ยนอีก) คำขอถัดไปจึงหยิบของเก่า
+    มาใช้ทันที และไปดึงเฉพาะช่วงที่ยังขาด ครั้งละไม่กี่ช่วง — ทยอยสะสมจนครบเอง
+    โดยผู้ใช้ไม่ต้องรอนาน (ตัวเก็บข้อมูลเบื้องหลังก็ช่วยดึงให้ทุกชั่วโมงด้วย)
+    """
+    merged = {}
+    have = missing = fetched = 0
+
+    for start, end in _chunk_ranges(days):
+        ck = f"gdelt:{tag}:chunk:{query}:{_stamp(start)}:{_stamp(end)}"
+        cached = cache_get(ck)
+        if cached is not None:
+            merged.update(cached.get("series") or {})
+            have += 1
+            continue
+
+        if fetched >= MAX_NEW_CHUNKS_PER_CALL:
+            missing += 1
+            continue
+
+        series = _parse_timeline(_fetch_json("doc/doc", {
+            "query": query, "mode": mode, "format": "json",
+            "startdatetime": _stamp(start), "enddatetime": _stamp(end)}))
+        fetched += 1
+        if series:
+            # ช่วงล่าสุดยังไม่จบวัน จึงเก็บสั้นกว่า ส่วนช่วงอดีตเก็บยาว
+            is_recent = (dt.date.today() - end).days < 2
+            cache_set(ck, {"series": series},
+                      Config.GDELT_TIMELINE_CACHE_TTL if is_recent else CHUNK_CACHE_TTL)
+            merged.update(series)
+            have += 1
+        else:
+            missing += 1
+
+    return {
+        "query": query, "timespan": f"{days}d", "series": merged,
+        "ok": bool(merged),
+        "chunks": {"total": have + missing, "ready": have, "pending": missing},
+        "note": (f"ยังดึงไม่ครบ ขาดอีก {missing} ช่วง — ระบบจะทยอยเก็บให้เอง "
+                 "เปิดหน้านี้อีกครั้งภายหลังจะได้ข้อมูลยาวขึ้น") if missing else None,
+        "error": None if merged else "ดึง timeline จาก GDELT ไม่ได้",
+    }
+
+
+def backfill(days: int = 365, max_chunks: int = 4) -> dict:
+    """
+    ทยอยดึงข่าวย้อนหลังของทุกธีมมาเก็บไว้ — เรียกจากเธรดเบื้องหลังทุกชั่วโมง
+    ยิ่งแอปรันนาน คลังข่าวยิ่งยาว เครื่องเรียนรู้ยิ่งมีตัวอย่างเยอะ
+    """
+    done = {"fetched": 0, "themes": 0, "pending": 0}
+    for key in Config.WORLD_THEMES:
+        q = theme_query(key)
+        if not q:
+            continue
+        res = _chunked_timeline(q, "TimelineTone", days, "tone")
+        ch = res.get("chunks") or {}
+        done["themes"] += 1
+        done["pending"] += ch.get("pending", 0)
+        if not ch.get("pending"):
+            continue
+        if done["fetched"] >= max_chunks:
+            break
+        done["fetched"] += 1
+    return done
 
 
 def _parse_timeline(data) -> dict:

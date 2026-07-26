@@ -79,29 +79,22 @@ def _gdelt_checks():
     from services import gdelt
     out = []
 
-    # GEO 2.0 — จุดข่าวบนลูกโลก
+    # จุดข่าวบนลูกโลก — ตอนนี้สร้างจาก ArtList + ประเทศต้นทาง
+    # (GDELT ปิด GEO 2.0 API แล้ว ยิงเข้าไปได้ 404 ทุกแบบ)
     def geo():
-        return gdelt._fetch_json("geo/geo", {
-            "query": "stock market", "format": "GeoJSON",
-            "mode": "PointData", "timespan": "24h", "maxpoints": 20})
+        return gdelt.world_points(theme="market", timespan="24h")
 
     def geo_ok(d):
-        if not d:
-            return False, "ไม่มีข้อมูลกลับมา (ถูกบล็อก/rate limit?)", None
-        feats = (d or {}).get("features") or []
-        if not feats:
-            return False, f"ไม่มี features · คีย์ที่ได้: {_keys(d)}", {"keys": _keys(d)}
-        p = (feats[0] or {}).get("properties") or {}
-        g = (feats[0] or {}).get("geometry") or {}
-        has = {"count": "count" in p, "html": "html" in p, "name": "name" in p,
-               "coordinates": bool(g.get("coordinates"))}
-        ok = has["coordinates"] and (has["count"] or has["name"])
-        return ok, f"{len(feats)} จุด · properties: {list(p.keys())[:8]}", {
-            "feature_count": len(feats), "properties_keys": list(p.keys())[:8],
-            "geometry_keys": list(g.keys()), "has": has,
-            "first": {"name": str(p.get("name"))[:60], "count": p.get("count")}}
+        pts = (d or {}).get("points") or []
+        if not pts:
+            return False, (d or {}).get("error") or "ไม่มีจุดข่าว (โดนจำกัดอัตราการเรียก?)", None
+        top = pts[0]
+        return True, (f"{len(pts)} ประเทศ · มากสุด {top['name']} {top['count']} ข่าว "
+                      f"(จาก {d.get('articles_seen')} ข่าว)"), {
+            "countries": len(pts), "articles_seen": d.get("articles_seen"),
+            "top": {"name": top["name"], "count": top["count"]}}
 
-    out.append(_check("GDELT", "GEO 2.0 (จุดบนลูกโลก)",
+    out.append(_check("GDELT", "จุดข่าวบนลูกโลก (ArtList + ประเทศ)",
                       "ถ้าพัง = ลูกโลกไม่มีจุดข่าว", geo, geo_ok))
 
     # DOC 2.0 TimelineTone — หัวใจของเครื่องเรียนรู้
@@ -125,31 +118,31 @@ def _gdelt_checks():
     out.append(_check("GDELT", "DOC 2.0 TimelineTone",
                       "ถ้าพัง = เครื่องเรียนรู้ไม่มีข้อมูลข่าว", tone, tone_ok))
 
-    # timespan ยาว — backtest ใช้ถึง 540 วัน อาจโดนจำกัด
+    # เพดาน timespan — ทดสอบจริงแล้วพบว่า GDELT รับได้ถึง ~90 วัน
+    # (100d ขึ้นไปตอบ 429 "query too large") โค้ดจึงตัดให้อัตโนมัติ
     def tone_long():
         return gdelt._fetch_json("doc/doc", {
             "query": "inflation", "mode": "TimelineTone",
-            "format": "json", "timespan": "540d"})
+            "format": "json", "timespan": f"{gdelt.MAX_TIMESPAN_DAYS}d"})
 
     def tone_long_ok(d):
         if not d:
-            # แยกให้ชัด: ต่อ GDELT ไม่ได้เลย ไม่ใช่เรื่อง timespan
             return False, "ต่อ GDELT ไม่ได้ (ดูผลของ TimelineTone ด้านบน)", None
         pts = (((d or {}).get("timeline") or [{}])[0] or {}).get("data") or []
         if not pts:
-            return False, "GDELT ตอบกลับแต่ไม่มีข้อมูล — ไม่รับ timespan 540 วัน " \
-                          "(ลด LEARN_WINDOW_DAYS ลง เช่น 365)", None
+            return False, f"ตอบกลับแต่ไม่มีข้อมูลที่ {gdelt.MAX_TIMESPAN_DAYS} วัน", None
         days = {str(p.get("date", ""))[:8] for p in pts}
         return True, f"รับได้ · {len(pts)} จุด ครอบคลุม {len(days)} วัน", {
             "points": len(pts), "distinct_days": len(days)}
 
-    out.append(_check("GDELT", "TimelineTone ย้อนหลัง 540 วัน",
-                      "ถ้าพัง = backtest ต้องลดช่วงเวลา", tone_long, tone_long_ok))
+    out.append(_check("GDELT", f"TimelineTone ย้อนหลัง {gdelt.MAX_TIMESPAN_DAYS} วัน",
+                      "เพดานที่ GDELT ยอมรับ (ยาวกว่านี้โดนปฏิเสธ)",
+                      tone_long, tone_long_ok))
 
     # ArtList — รายการข่าว
     def art():
         return gdelt._fetch_json("doc/doc", {
-            "query": "stock market", "mode": "ArtList", "format": "json",
+            "query": "inflation", "mode": "ArtList", "format": "json",
             "maxrecords": 5, "timespan": "24h", "sort": "DateDesc"})
 
     def art_ok(d):

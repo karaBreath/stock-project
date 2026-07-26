@@ -64,8 +64,9 @@ class Config:
 
     # --- GDELT (ข่าวทั่วโลก 65 ภาษา · ฟรี ไม่ต้องใช้ API key) ---
     GDELT_BASE = os.environ.get("GDELT_BASE", "https://api.gdeltproject.org/api/v2")
-    GDELT_TIMEOUT = int(os.environ.get("GDELT_TIMEOUT", "25"))
-    GDELT_CACHE_TTL = int(os.environ.get("GDELT_CACHE_TTL", "900"))    # จุดบนลูกโลก
+    GDELT_TIMEOUT = int(os.environ.get("GDELT_TIMEOUT", "35"))
+    # จุดบนลูกโลก: ตั้งยาวกว่ารอบเก็บข้อมูลเบื้องหลัง เพื่อให้ cache อุ่นเสมอ
+    GDELT_CACHE_TTL = int(os.environ.get("GDELT_CACHE_TTL", "5400"))
     GDELT_TIMELINE_CACHE_TTL = int(os.environ.get("GDELT_TIMELINE_CACHE_TTL", "3600"))
     GDELT_MAX_POINTS = int(os.environ.get("GDELT_MAX_POINTS", "350"))
 
@@ -96,7 +97,11 @@ class Config:
     # --- Learning engine (เก็บข้อมูลสะสม → หาความสัมพันธ์ข่าว ↔ ราคา) ---
     LEARN_AUTO = os.environ.get("LEARN_AUTO", "1") == "1"          # เก็บ snapshot อัตโนมัติ
     LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL", "3600"))  # ทุกกี่วินาที
-    LEARN_WINDOW_DAYS = int(os.environ.get("LEARN_WINDOW_DAYS", "180"))
+    # GDELT ให้ต่อ 1 คำขอได้สูงสุด ~90 วัน (ยาวกว่านี้ตอบ 429 "query too large")
+    # แต่แอปแบ่งยิงทีละช่วงแล้วเก็บสะสมเอง จึงเรียนรู้จากช่วงที่ยาวกว่านั้นได้
+    LEARN_WINDOW_DAYS = int(os.environ.get("LEARN_WINDOW_DAYS", "365"))
+    # ความยาวที่ตัวเก็บข้อมูลเบื้องหลังจะทยอยดึงย้อนหลังมาเก็บไว้
+    LEARN_BACKFILL_DAYS = int(os.environ.get("LEARN_BACKFILL_DAYS", "540"))
     LEARN_MIN_SAMPLES = int(os.environ.get("LEARN_MIN_SAMPLES", "30"))  # n ขั้นต่ำถึงจะเชื่อ
     LEARN_LAGS = [0, 1, 2, 3, 5]   # feature วันนี้ → ผลตอบแทนอีกกี่วัน
 
