@@ -2,7 +2,12 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "python app.py"
+# gunicorn แบบ 1 worker + 8 threads:
+#  - 1 worker เพื่อไม่ให้เธรดเก็บข้อมูลเรียนรู้ (learn-collector) ถูกสร้างซ้ำ
+#    และไม่แย่งเขียน SQLite พร้อมกันหลาย process
+#  - 8 threads เพื่อให้หน้าอื่นยังใช้ได้ระหว่างหน้าหนัก ๆ (ตรวจระบบ/รายงาน) กำลังรัน
+#  - timeout 300s เพราะรายงานประจำวันสแกนหุ้นหลายสิบตัว
+startCommand = "gunicorn app:app -k gthread -w 1 --threads 8 -t 300 -b 0.0.0.0:$PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"

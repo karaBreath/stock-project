@@ -242,6 +242,28 @@ python app.py
 
 ---
 
+## ☁️ Deploy บน Railway (ทำจากไอแพดได้ ไม่ต้องใช้คอมพิวเตอร์)
+
+ไฟล์ deploy เตรียมไว้ครบแล้ว (`railway.toml`, `Procfile`, `runtime.txt`) —
+รันด้วย gunicorn 1 worker + 8 threads เพื่อให้หน้าอื่นใช้ได้ระหว่างหน้าหนัก ๆ กำลังโหลด
+
+1. เข้า [railway.com](https://railway.com) → สมัคร/ล็อกอินด้วยบัญชี GitHub
+2. **New Project → Deploy from GitHub repo** → เลือก `stock-project`
+   (ครั้งแรก Railway จะขอสิทธิ์เข้าถึง repo — กด Configure แล้วเลือก repo นี้)
+3. ที่ Settings ของ service → **Branch** เลือก branch ที่ต้องการ deploy
+4. รอ build เสร็จ (2-4 นาที) → Settings → **Networking → Generate Domain**
+   จะได้ URL แบบ `xxx.up.railway.app` เปิดจาก Safari บนไอแพดได้เลย
+5. เปิดเมนู **ตรวจระบบ** ในแอปเพื่อยืนยันว่า GDELT / Yahoo ใช้งานได้จริงจากเซิร์ฟเวอร์
+
+**ให้ข้อมูลสะสม (watchlist, พอร์ต, ความรู้ที่เรียน) อยู่รอดข้าม deploy:**
+ดิสก์ของ Railway เป็นแบบชั่วคราว — เพิ่ม Volume ให้ service (New → Volume,
+mount ที่ `/data`) แล้วตั้ง Variable `DB_PATH=/data/stock_app.db`
+
+ค่าใช้จ่าย: แผนเริ่มต้นมีเครดิตฟรีรายเดือน แอปเบา ๆ แบบนี้มักอยู่ในเครดิตฟรี
+(ถ้าเครดิตหมด service จะหยุดจนกว่าจะถึงรอบใหม่ — ไม่โดนเก็บเงินโดยไม่รู้ตัว)
+
+---
+
 ## 🔔 ตั้งค่าแจ้งเตือน LINE (ไม่บังคับ)
 
 LINE Notify ถูกปิดบริการแล้ว แอปนี้จึงใช้ **LINE Messaging API** แทน:
