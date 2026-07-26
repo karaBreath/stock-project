@@ -58,6 +58,13 @@ def create_app():
     def health():
         return {"status": "ok"}
 
+    # service worker ต้องเสิร์ฟจาก root ถึงจะคุมทั้งเว็บได้ (scope "/")
+    @app.route("/sw.js")
+    def service_worker():
+        from flask import send_from_directory
+        return send_from_directory(app.static_folder, "sw.js",
+                                   mimetype="application/javascript")
+
     return app
 
 
