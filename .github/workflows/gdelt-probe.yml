@@ -11,26 +11,27 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Probe GDELT endpoints directly
+      - name: Probe GDELT (round 2 — เว้นจังหวะ 6 วิ กัน rate limit)
         run: |
           UA="NEBULA-Stock-App/1.0 (educational stock research)"
           B="https://api.gdeltproject.org/api/v2"
           probe () {
             name="$1"; url="$2"
             echo "---------- $name"
-            out=$(curl -sS -m 60 -A "$UA" -w '\nHTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n' "$url" 2>&1)
-            echo "$out" | tail -c 400
-            echo
+            curl -sS -m 60 -A "$UA" -w '\nHTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n' "$url" 2>&1 | tail -c 260
+            echo; sleep 6
           }
-          probe "GEO 24h"          "$B/geo/geo?query=stock+market&format=GeoJSON&mode=PointData&timespan=24h&maxpoints=20"
-          probe "TONE 30d"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=30d"
-          probe "TONE 90d"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=90d"
-          probe "TONE 180d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=180d"
-          probe "TONE 365d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=365d"
-          probe "TONE 540d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=540d"
-          probe "TONE 3m"          "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=3m"
-          probe "TONE 18m"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=18m"
-          probe "ARTLIST 24h"      "$B/doc/doc?query=stock+market&mode=ArtList&format=json&maxrecords=5&timespan=24h&sort=DateDesc"
-          probe "ARTLIST 24h noSort" "$B/doc/doc?query=stock+market&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          probe "GEO no maxpoints" "$B/geo/geo?query=stock+market&format=GeoJSON&mode=PointData&timespan=24h"
-          probe "GEO quoted query" "$B/geo/geo?query=%22stock%20market%22&format=GeoJSON&mode=PointData&timespan=24h&maxpoints=20"
+          # 1) GEO endpoint ยังมีอยู่ไหม (404 ทุกแบบในรอบแรก)
+          probe "GEO bare"        "$B/geo/geo"
+          probe "GEO simple"      "$B/geo/geo?query=protest&format=GeoJSON&mode=PointData&timespan=24h"
+          probe "GEO html mode"   "$B/geo/geo?query=protest&format=html&mode=PointData&timespan=24h"
+          # 2) ArtList — คำเดียว vs วลีมีเครื่องหมายคำพูด
+          probe "ART single word" "$B/doc/doc?query=inflation&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          probe "ART quoted"      "$B/doc/doc?query=%22stock%20market%22&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          # 3) หาเพดาน timespan ที่แท้จริง
+          probe "TONE 100d"       "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=100d"
+          probe "TONE 120d"       "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=120d"
+          # 4) query จริงของธีมเรา (ซับซ้อน มี OR หลายตัว) ใช้ได้ไหม
+          probe "TONE theme 90d"  "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=TimelineTone&format=json&timespan=90d"
+          probe "VOL theme 90d"   "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=TimelineVol&format=json&timespan=90d"
+          probe "ART theme 24h"   "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=ArtList&format=json&maxrecords=5&timespan=24h"
