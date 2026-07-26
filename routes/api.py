@@ -12,7 +12,7 @@ from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
     alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
-    selfcheck, volume_profile,
+    selfcheck, volume_profile, strategy_lab,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -377,6 +377,37 @@ def volume_scan_ep():
         tickers = a.get("tickers") or Config.DEFAULT_US_TICKERS
     return jsonify(volume_profile.scan_setups(
         tickers, max_scan=int(a.get("max_scan", volume_profile.SCAN_CAP))))
+
+
+# ---------------- 20) Strategy Lab — โรงงานทดสอบกลยุทธ์หลายตระกูล ----------------
+@api.get("/lab/strategies")
+def lab_strategies_ep():
+    """รายชื่อกลยุทธ์ทั้งหมดในแล็บ + สถานะ (รันได้/มีหลักฐานแล้ว/อยู่ในแผน)"""
+    return jsonify(strategy_lab.list_strategies())
+
+
+@api.get("/lab/run/<key>/<ticker>")
+def lab_run_ep(key, ticker):
+    """รันกลยุทธ์ 1 ตัวกับหุ้น 1 ตัว ผ่านประตูความซื่อสัตย์ (walk-forward + ค่าธรรมเนียม)"""
+    return jsonify(strategy_lab.run(
+        key, ticker,
+        days=int(request.args.get("days", strategy_lab.DEFAULT_DAYS)),
+        train_frac=float(request.args.get("train_frac", 0.6)),
+        fee_pct=float(request.args.get("fee", strategy_lab.DEFAULT_FEE_PCT)),
+    ))
+
+
+@api.post("/lab/league")
+def lab_league_ep():
+    """จัดอันดับทุกกลยุทธ์ข้ามตะกร้าหุ้น — ตัวไหนน่าตามต่อ ตัวไหนตกรอบ"""
+    a = _args()
+    tickers = a.get("tickers")
+    if a.get("source") == "watchlist":
+        tickers = [w["ticker"] for w in query("SELECT ticker FROM watchlist")] or None
+    return jsonify(strategy_lab.league(
+        tickers=tickers,
+        days=int(a.get("days") or strategy_lab.DEFAULT_DAYS),
+        include=a.get("include")))
 
 
 # ---------------- 18) ตรวจระบบ ----------------
