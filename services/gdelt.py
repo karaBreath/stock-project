@@ -386,25 +386,34 @@ def _chunked_timeline(query: str, mode: str, days: int, tag: str) -> dict:
     }
 
 
-def backfill(days: int = 365, max_chunks: int = 4) -> dict:
+_backfill_cursor = [0]
+
+
+def backfill(days: int = 540, themes_per_run: int = 2) -> dict:
     """
-    ทยอยดึงข่าวย้อนหลังของทุกธีมมาเก็บไว้ — เรียกจากเธรดเบื้องหลังทุกชั่วโมง
+    ทยอยดึงข่าวย้อนหลังมาเก็บไว้ — เรียกจากเธรดเบื้องหลังทุกชั่วโมง
+
+    วัดจริงแล้ว GDELT ปฏิเสธ (429) บ่อยมากแม้คำขอจะถูกต้อง จึงทำทีละ 2 ธีมต่อรอบ
+    แบบวนไปเรื่อย ๆ ธีมที่ยังไม่ครบจะได้คิวในรอบถัดไปเอง
+    ช่วงที่ดึงสำเร็จแล้วเก็บไว้ 60 วัน (ข้อมูลอดีตไม่เปลี่ยน) จึงไม่ต้องดึงซ้ำ
     ยิ่งแอปรันนาน คลังข่าวยิ่งยาว เครื่องเรียนรู้ยิ่งมีตัวอย่างเยอะ
     """
-    done = {"fetched": 0, "themes": 0, "pending": 0}
-    for key in Config.WORLD_THEMES:
+    keys = list(Config.WORLD_THEMES)
+    if not keys:
+        return {"themes": 0, "ready": 0, "pending": 0}
+
+    done = {"themes": 0, "ready": 0, "pending": 0, "days": days}
+    for i in range(min(themes_per_run, len(keys))):
+        key = keys[(_backfill_cursor[0] + i) % len(keys)]
         q = theme_query(key)
         if not q:
             continue
-        res = _chunked_timeline(q, "TimelineTone", days, "tone")
-        ch = res.get("chunks") or {}
+        ch = (_chunked_timeline(q, "TimelineTone", days, "tone").get("chunks") or {})
         done["themes"] += 1
+        done["ready"] += ch.get("ready", 0)
         done["pending"] += ch.get("pending", 0)
-        if not ch.get("pending"):
-            continue
-        if done["fetched"] >= max_chunks:
-            break
-        done["fetched"] += 1
+
+    _backfill_cursor[0] = (_backfill_cursor[0] + themes_per_run) % len(keys)
     return done
 
 

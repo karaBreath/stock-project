@@ -277,3 +277,27 @@ def test_short_timespan_still_single_request(monkeypatch):
     res = G.tone_timeline("q", timespan="30d")
     assert res["ok"] and seen.get("timespan") == "30d"
     assert "startdatetime" not in seen
+
+
+def test_backfill_rotates_themes_and_stays_gentle(monkeypatch):
+    """ตัวเก็บเบื้องหลังต้องทำทีละ 2 ธีม แล้ววนไปธีมถัดไปในรอบหน้า"""
+    seen = []
+
+    def fake_chunked(q, mode, days, tag):
+        seen.append(q)
+        return {"series": {}, "ok": True,
+                "chunks": {"total": 7, "ready": 2, "pending": 5}}
+
+    monkeypatch.setattr(G, "_chunked_timeline", fake_chunked)
+    G._backfill_cursor[0] = 0
+
+    r1 = G.backfill(days=540, themes_per_run=2)
+    assert r1["themes"] == 2 and r1["pending"] == 10
+    r2 = G.backfill(days=540, themes_per_run=2)
+    assert r2["themes"] == 2
+    assert len(set(seen)) == 4          # รอบสองไปธีมใหม่ ไม่ซ้ำรอบแรก
+
+
+def test_backfill_survives_no_themes(monkeypatch):
+    monkeypatch.setattr(G.Config, "WORLD_THEMES", {})
+    assert G.backfill()["themes"] == 0
