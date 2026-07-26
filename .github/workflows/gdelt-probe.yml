@@ -11,27 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Probe GDELT (round 2 — เว้นจังหวะ 6 วิ กัน rate limit)
+      - name: Probe GDELT (รอบ 3 — ยิงทีละช่วง 90 วันย้อนหลัง)
         run: |
           UA="NEBULA-Stock-App/1.0 (educational stock research)"
-          B="https://api.gdeltproject.org/api/v2"
+          B="https://api.gdeltproject.org/api/v2/doc/doc"
           probe () {
-            name="$1"; url="$2"
-            echo "---------- $name"
-            curl -sS -m 60 -A "$UA" -w '\nHTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n' "$url" 2>&1 | tail -c 260
-            echo; sleep 6
+            echo "---------- $1"
+            curl -sS -m 60 -A "$UA" -w '\nHTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n' "$2" 2>&1 | tail -c 300
+            echo; sleep 8
           }
-          # 1) GEO endpoint ยังมีอยู่ไหม (404 ทุกแบบในรอบแรก)
-          probe "GEO bare"        "$B/geo/geo"
-          probe "GEO simple"      "$B/geo/geo?query=protest&format=GeoJSON&mode=PointData&timespan=24h"
-          probe "GEO html mode"   "$B/geo/geo?query=protest&format=html&mode=PointData&timespan=24h"
-          # 2) ArtList — คำเดียว vs วลีมีเครื่องหมายคำพูด
-          probe "ART single word" "$B/doc/doc?query=inflation&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          probe "ART quoted"      "$B/doc/doc?query=%22stock%20market%22&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          # 3) หาเพดาน timespan ที่แท้จริง
-          probe "TONE 100d"       "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=100d"
-          probe "TONE 120d"       "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=120d"
-          # 4) query จริงของธีมเรา (ซับซ้อน มี OR หลายตัว) ใช้ได้ไหม
-          probe "TONE theme 90d"  "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=TimelineTone&format=json&timespan=90d"
-          probe "VOL theme 90d"   "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=TimelineVol&format=json&timespan=90d"
-          probe "ART theme 24h"   "$B/doc/doc?query=%28war%20OR%20conflict%20OR%20airstrike%20OR%20invasion%20OR%20ceasefire%29&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          Q="query=inflation&mode=TimelineTone&format=json"
+          # ช่วงล่าสุด 90 วัน (ควรได้ 200 อยู่แล้ว)
+          probe "chunk 0: ย้อน 0-90 วัน"   "$B?$Q&startdatetime=20260427000000&enddatetime=20260726000000"
+          # ย้อนไปอีก 90 วัน — จุดชี้ขาดว่าแบ่งยิงได้ไหม
+          probe "chunk 1: ย้อน 90-180 วัน" "$B?$Q&startdatetime=20260127000000&enddatetime=20260427000000"
+          probe "chunk 2: ย้อน 180-270 วัน" "$B?$Q&startdatetime=20251029000000&enddatetime=20260127000000"
+          probe "chunk 3: ย้อน 270-360 วัน" "$B?$Q&startdatetime=20250731000000&enddatetime=20251029000000"
+          # ย้อนไกลมาก — ดูว่าคลังลึกแค่ไหน
+          probe "chunk เก่า: ปี 2024"      "$B?$Q&startdatetime=20240101000000&enddatetime=20240331000000"
+          probe "chunk เก่ามาก: ปี 2018"   "$B?$Q&startdatetime=20180101000000&enddatetime=20180331000000"
+          # ปริมาณข่าว (TimelineVol) แบ่งช่วงได้ไหม
+          probe "VOL ย้อน 90-180 วัน"      "$B?query=inflation&mode=TimelineVol&format=json&startdatetime=20260127000000&enddatetime=20260427000000"
+          # query ธีมจริงของเรา แบ่งช่วงได้ไหม
+          probe "ธีมจริง ย้อน 90-180 วัน"  "$B?query=%28war%20OR%20conflict%20OR%20invasion%29&mode=TimelineTone&format=json&startdatetime=20260127000000&enddatetime=20260427000000"
