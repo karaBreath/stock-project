@@ -2,6 +2,8 @@
 name: gdelt-probe
 
 on:
+  push:
+    paths: [".github/workflows/gdelt-probe.yml"]
   workflow_dispatch:
 
 jobs:
