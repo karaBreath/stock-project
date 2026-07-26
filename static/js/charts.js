@@ -9,6 +9,17 @@ const NEON = {
 
 const _charts = {};
 
+// กันเหนียว: ถ้า CDN ของ Chart.js โหลดไม่สำเร็จ (เน็ตหลุด/ช้า)
+// ให้แสดงข้อความแทนกราฟ แทนที่จะ throw จนทั้งหน้าพัง
+if (typeof Chart === 'undefined') {
+  window.Chart = function (el) {
+    const p = el && el.parentElement;
+    if (p) p.innerHTML = '<div class="small muted" style="padding:16px">⚠️ โหลดไลบรารีกราฟไม่สำเร็จ — เช็คอินเทอร์เน็ตแล้วรีเฟรชหน้า</div>';
+  };
+  Chart.prototype.destroy = function () {};
+  Chart.defaults = { font: {}, plugins: { legend: { labels: {} } } };
+}
+
 Chart.defaults.font.family = "'Sarabun', sans-serif";
 Chart.defaults.color = NEON.text;
 Chart.defaults.plugins.legend.labels.boxWidth = 12;

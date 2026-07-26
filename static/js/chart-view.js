@@ -901,6 +901,14 @@
   window.routes = window.routes || {};
 
   window.routes.chart = async function (app) {
+    // กันเหนียว: CDN ของ LightweightCharts โหลดไม่สำเร็จ -> บอกผู้ใช้ ไม่พังทั้งหน้า
+    if (typeof LightweightCharts === 'undefined') {
+      app.innerHTML = `<div class="view active"><div class="card">
+        <div class="card-title">กราฟ</div>
+        <div class="small muted">⚠️ โหลดไลบรารีกราฟ (LightweightCharts) ไม่สำเร็จ —
+        เช็คอินเทอร์เน็ตแล้วรีเฟรชหน้า</div></div></div>`;
+      return;
+    }
     document.body.classList.add('chart-mode');
     const mainEl = document.querySelector('.main');
     if (mainEl) { mainEl.dataset.prevPad = mainEl.style.padding; mainEl.style.padding = '0'; mainEl.style.overflow = 'hidden'; }

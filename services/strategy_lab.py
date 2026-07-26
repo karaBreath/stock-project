@@ -249,6 +249,11 @@ def run(key: str, ticker: str, days: int = DEFAULT_DAYS, train_frac: float = 0.6
         return {"ok": False, "error": f"กลยุทธ์ '{meta['name']}' ยังรันในแล็บไม่ได้",
                 "strategy": {"key": key, **meta}}
 
+    # กันค่าพารามิเตอร์ประหลาดจาก URL (เช่น train_frac=0 จะทำให้ไม่มีช่วง train เลย)
+    days = min(1800, max(200, days))
+    train_frac = min(0.85, max(0.3, train_frac))
+    fee_pct = min(2.0, max(0.0, fee_pct))
+
     ticker = stock_data.normalize_ticker(ticker)
 
     # news_lag ใช้เครื่อง backtest ข่าวที่มีอยู่แล้ว (walk-forward + Bonferroni)
