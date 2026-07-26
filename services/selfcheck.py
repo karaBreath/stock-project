@@ -79,6 +79,16 @@ def _gdelt_checks():
     from services import gdelt
     out = []
 
+    # ถ้าตัวแรกโดนจำกัดอัตราจนเข้าโหมดพัก ตัวที่เหลือจะถูกข้ามทันที (0ms)
+    # ต้องรายงานให้ตรงว่า "ข้ามเพราะกำลังพัก" ไม่ใช่ "ใช้ไม่ได้" — คนละเรื่องกัน
+    def _mark_cooldown(rows):
+        for r in rows:
+            if not r["ok"] and r["ms"] < 50 and gdelt.in_cooldown():
+                r["detail"] = (f"ข้ามการตรวจ — GDELT กำลังจำกัดอัตราการเรียก "
+                               f"(พักอีก {gdelt.cooldown_left()} วินาทีแล้วลองใหม่ได้)")
+                r["skipped"] = True
+        return rows
+
     # จุดข่าวบนลูกโลก — ตอนนี้สร้างจาก ArtList + ประเทศต้นทาง
     # (GDELT ปิด GEO 2.0 API แล้ว ยิงเข้าไปได้ 404 ทุกแบบ)
     def geo():
@@ -156,7 +166,7 @@ def _gdelt_checks():
     out.append(_check("GDELT", "DOC 2.0 ArtList (รายการข่าว)",
                       "ถ้าพัง = ไม่มีรายการข่าวโลก", art, art_ok))
 
-    return out
+    return _mark_cooldown(out)
 
 
 # ---------------------------------------------------------------------------
@@ -271,17 +281,29 @@ def run(include_symbols: bool = True) -> dict:
         g["total"] += 1
         g["ok"] += 1 if c["ok"] else 0
 
+    skipped = [c for c in failed if c.get("skipped")]
+    broken = [c for c in failed if not c.get("skipped")]
+
+    if not failed:
+        verdict = "ทุกอย่างพร้อมใช้งาน ✅"
+    elif not broken:
+        verdict = (f"ใช้งานได้ · ข้าม {len(skipped)} รายการเพราะ GDELT "
+                   "กำลังจำกัดอัตราการเรียก (ไม่ใช่ของพัง — ลองใหม่อีกสักครู่)")
+    else:
+        verdict = f"มี {len(broken)} รายการที่ใช้ไม่ได้ — ดูรายละเอียดด้านล่าง"
+
     return {
-        "ok": not failed,
+        "ok": not broken,
         "checked_at": dt.datetime.now().isoformat(timespec="seconds"),
         "total": len(checks),
         "passed": sum(1 for c in checks if c["ok"]),
-        "failed": len(failed),
+        "failed": len(broken),
+        "skipped": len(skipped),
         "groups": groups,
         "checks": checks,
-        "failed_names": [f"{c['group']}/{c['name']}" for c in failed],
-        "verdict": ("ทุกอย่างพร้อมใช้งาน ✅" if not failed
-                    else f"มี {len(failed)} รายการที่ใช้ไม่ได้ — ดูรายละเอียดด้านล่าง"),
+        "failed_names": [f"{c['group']}/{c['name']}" for c in broken],
+        "skipped_names": [f"{c['group']}/{c['name']}" for c in skipped],
+        "verdict": verdict,
     }
 
 
@@ -290,7 +312,7 @@ def as_text(result: dict) -> str:
     lines = [f"SELF-CHECK {result.get('checked_at')} — "
              f"ผ่าน {result.get('passed')}/{result.get('total')}"]
     for c in result.get("checks", []):
-        mark = "OK  " if c["ok"] else "FAIL"
+        mark = "OK  " if c["ok"] else ("SKIP" if c.get("skipped") else "FAIL")
         lines.append(f"[{mark}] {c['group']}/{c['name']} ({c['ms']}ms) — {c['detail']}"
                      + (f" | {c['error']}" if c.get("error") else ""))
     return "\n".join(lines)

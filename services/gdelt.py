@@ -66,6 +66,15 @@ def _clamp_timespan(timespan: str) -> str:
     return f"{int(min(days, MAX_TIMESPAN_DAYS))}d"
 
 
+def in_cooldown() -> bool:
+    """ตอนนี้อยู่ในช่วงพักหลังโดน GDELT ปฏิเสธซ้ำ ๆ หรือไม่"""
+    return time.time() < _cooldown_until[0]
+
+
+def cooldown_left() -> int:
+    return max(0, int(_cooldown_until[0] - time.time()))
+
+
 def _throttle():
     """เว้นจังหวะก่อนยิง GDELT · ถ้าเพิ่งโดน 429 จะบอกให้ข้ามไปเลย"""
     with _rate_lock:
@@ -82,7 +91,7 @@ def _throttle():
 # ---------------------------------------------------------------------------
 # low-level fetch
 # ---------------------------------------------------------------------------
-def _fetch_json(path: str, params: dict, retries: int = 2):
+def _fetch_json(path: str, params: dict, retries: int = 1):
     """
     เรียก GDELT แล้วคืน dict; คืน None ถ้าล้มเหลว (GDELT บางทีตอบ text ไม่ใช่ json)
 
@@ -111,7 +120,7 @@ def _fetch_json(path: str, params: dict, retries: int = 2):
         except Exception:
             pass
         if attempt < retries:
-            time.sleep(3.0 * (attempt + 1))
+            time.sleep(2.0 * (attempt + 1))
     return None
 
 
@@ -152,6 +161,7 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     out = {"theme": theme, "label": label, "color": color, "query": query,
            "timespan": timespan, "points": [], "ok": False, "source": "artlist-country"}
 
+    # หน้าเว็บรอไม่ได้นาน -> ยิงครั้งเดียวพอ (ตัวเก็บเบื้องหลังจะลองซ้ำให้เอง)
     data = _fetch_json("doc/doc", {
         "query": query,
         "mode": "ArtList",
@@ -159,11 +169,13 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
         "maxrecords": 250,
         "timespan": timespan,
         "sort": "DateDesc",
-    })
+    }, retries=0)
 
     arts = (data or {}).get("articles") or []
     if not arts:
-        out["error"] = "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)"
+        out["error"] = (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
+                        if in_cooldown() else
+                        "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)")
         return out
 
     out["points"] = _points_from_articles(arts, color, theme)

@@ -171,12 +171,18 @@ routes.selfcheck = async (app) => {
   runCheck();
 
   async function runCheck() {
-    $('#scRun').disabled = true;
-    $('#scBody').innerHTML = `<div class="card">${loader('กำลังยิงทดสอบทุกแหล่งข้อมูล…')}</div>`;
+    // การตรวจใช้เวลาเป็นนาที ผู้ใช้อาจเปลี่ยนหน้าไปก่อน — DOM เดิมจะหายไปแล้ว
+    // จึงต้องเช็คทุกครั้งก่อนแตะ ไม่งั้นจะพังตอนกลับมา
+    const setDisabled = (sel, v) => { const el = $(sel); if (el) el.disabled = v; };
+    const setHTML = (sel, html) => { const el = $(sel); if (el) el.innerHTML = html; };
+
+    setDisabled('#scRun', true);
+    setHTML('#scBody', `<div class="card">${loader('กำลังยิงทดสอบทุกแหล่งข้อมูล…')}</div>`);
     const r = await api('/selfcheck');
-    $('#scRun').disabled = false;
+    if (!$('#scBody')) return;              // เปลี่ยนหน้าไปแล้ว ไม่ต้องวาดต่อ
+    setDisabled('#scRun', false);
     if (!r || !r.checks) {
-      $('#scBody').innerHTML = `<div class="card">${emptyState('⚠️', 'ตรวจไม่สำเร็จ')}</div>`;
+      setHTML('#scBody', `<div class="card">${emptyState('⚠️', 'ตรวจไม่สำเร็จ')}</div>`);
       return;
     }
 
@@ -185,11 +191,11 @@ routes.selfcheck = async (app) => {
     r.checks.forEach(c => (byGroup[c.group] = byGroup[c.group] || []).push(c));
 
     lastText = r.checks.map(c =>
-      `[${c.ok ? 'OK  ' : 'FAIL'}] ${c.group}/${c.name} (${c.ms}ms) — ${c.detail}`
+      `[${c.ok ? 'OK  ' : (c.skipped ? 'SKIP' : 'FAIL')}] ${c.group}/${c.name} (${c.ms}ms) — ${c.detail}`
       + (c.error ? ` | ${c.error}` : '')).join('\n');
-    $('#scCopy').disabled = false;
+    setDisabled('#scCopy', false);
 
-    $('#scBody').innerHTML = `
+    setHTML('#scBody', `
       <div class="card" style="margin-bottom:14px;border-color:${col}">
         <div class="card-title">ผลตรวจ</div>
         <div style="color:${col};font-weight:600;font-size:16px">${r.verdict}</div>
@@ -199,6 +205,10 @@ routes.selfcheck = async (app) => {
         ${r.failed_names && r.failed_names.length
           ? `<div class="small" style="margin-top:8px">ที่ใช้ไม่ได้: <b>${r.failed_names.join(' · ')}</b></div>`
           : ''}
+        ${r.skipped_names && r.skipped_names.length
+          ? `<div class="small muted" style="margin-top:6px">⏭️ ข้ามชั่วคราว (โดนจำกัดอัตราการเรียก ไม่ใช่ของพัง):
+             <b>${r.skipped_names.join(' · ')}</b></div>`
+          : ''}
       </div>
 
       ${Object.entries(byGroup).map(([g, list]) => `
@@ -207,9 +217,11 @@ routes.selfcheck = async (app) => {
             <span class="small muted">(${list.filter(c => c.ok).length}/${list.length})</span></div>
           <div class="table-scroll"><table class="tbl">
             <thead><tr><th>รายการ</th><th>ผล</th><th>เวลา</th><th>รายละเอียด</th></tr></thead>
-            <tbody>${list.map(c => `<tr style="${c.ok ? '' : 'background:rgba(255,77,109,.07)'}">
+            <tbody>${list.map(c => `<tr style="${c.ok ? '' : (c.skipped ? 'opacity:.65' : 'background:rgba(255,77,109,.07)')}">
               <td>${c.name}<div class="small muted">${c.hint || ''}</div></td>
-              <td>${c.ok ? '<span class="up">✅ ผ่าน</span>' : '<span class="down">❌ ไม่ผ่าน</span>'}</td>
+              <td>${c.ok ? '<span class="up">✅ ผ่าน</span>'
+                    : (c.skipped ? '<span class="muted">⏭️ ข้ามชั่วคราว</span>'
+                                 : '<span class="down">❌ ไม่ผ่าน</span>')}</td>
               <td class="mono small">${c.ms}ms</td>
               <td class="small">${c.detail || ''}
                 ${c.error ? `<div class="down small mono" style="margin-top:4px">${c.error}</div>` : ''}</td>
@@ -221,6 +233,6 @@ routes.selfcheck = async (app) => {
         <textarea readonly rows="10" style="width:100%;background:rgba(0,0,0,.35);color:var(--text);
           border:1px solid var(--stroke);border-radius:var(--radius-sm);padding:10px;
           font-family:monospace;font-size:12px">${lastText}</textarea>
-      </div>`;
+      </div>`);
   }
 };
