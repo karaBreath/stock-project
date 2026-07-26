@@ -1,0 +1,34 @@
+# ตรวจ GDELT ตรง ๆ จากเครื่อง GitHub — ดูว่า endpoint/พารามิเตอร์ไหนใช้ได้จริง
+name: gdelt-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Probe GDELT endpoints directly
+        run: |
+          UA="NEBULA-Stock-App/1.0 (educational stock research)"
+          B="https://api.gdeltproject.org/api/v2"
+          probe () {
+            name="$1"; url="$2"
+            echo "---------- $name"
+            out=$(curl -sS -m 60 -A "$UA" -w '\nHTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n' "$url" 2>&1)
+            echo "$out" | tail -c 400
+            echo
+          }
+          probe "GEO 24h"          "$B/geo/geo?query=stock+market&format=GeoJSON&mode=PointData&timespan=24h&maxpoints=20"
+          probe "TONE 30d"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=30d"
+          probe "TONE 90d"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=90d"
+          probe "TONE 180d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=180d"
+          probe "TONE 365d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=365d"
+          probe "TONE 540d"        "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=540d"
+          probe "TONE 3m"          "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=3m"
+          probe "TONE 18m"         "$B/doc/doc?query=inflation&mode=TimelineTone&format=json&timespan=18m"
+          probe "ARTLIST 24h"      "$B/doc/doc?query=stock+market&mode=ArtList&format=json&maxrecords=5&timespan=24h&sort=DateDesc"
+          probe "ARTLIST 24h noSort" "$B/doc/doc?query=stock+market&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          probe "GEO no maxpoints" "$B/geo/geo?query=stock+market&format=GeoJSON&mode=PointData&timespan=24h"
+          probe "GEO quoted query" "$B/geo/geo?query=%22stock%20market%22&format=GeoJSON&mode=PointData&timespan=24h&maxpoints=20"
