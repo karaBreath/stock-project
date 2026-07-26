@@ -13,7 +13,7 @@ from services import scoring, sentiment as sentiment_svc, macro, gdelt
 from services.universe import get_universe
 
 
-def generate(market="th", top_n=5) -> dict:
+def generate(market="us", top_n=5) -> dict:
     # ใช้ universe เต็ม + watchlist ส่วนตัว
     full = get_universe(market)
     watch = [w["ticker"] for w in query("SELECT ticker FROM watchlist")]

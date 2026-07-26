@@ -47,10 +47,13 @@ function themeIcon(theme, color) {
     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
 }
 
-// ---------- lazy loader ของ globe.gl (มี CDN สำรอง) ----------
+// ---------- lazy loader ของ globe.gl ----------
+// ใช้ไฟล์ที่ฝังใน repo เป็นหลัก (CDN บางตัวเปลี่ยนเป็น ESM แล้ว โหลดตรง ๆ ไม่ได้
+// ทำให้ลูกโลกหาย) — CDN แบบระบุเวอร์ชันเป็นตัวสำรองเท่านั้น
 const GLOBE_CDNS = [
-  'https://unpkg.com/globe.gl',
-  'https://cdn.jsdelivr.net/npm/globe.gl/dist/globe.gl.min.js',
+  '/static/vendor/globe.gl.min.js',
+  'https://cdn.jsdelivr.net/npm/globe.gl@2.46.1/dist/globe.gl.min.js',
+  'https://unpkg.com/globe.gl@2.46.1/dist/globe.gl.min.js',
 ];
 
 function loadScript(src) {
@@ -185,7 +188,7 @@ routes.globe = async (app) => {
       box.innerHTML = '';
       globe = Globe()(box)
         .backgroundColor('rgba(0,0,0,0)')
-        .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+        .globeImageUrl('/static/vendor/earth-night.jpg')
         .showAtmosphere(true)
         .atmosphereColor('#4dd4ff')
         .atmosphereAltitude(0.18)

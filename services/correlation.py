@@ -378,7 +378,7 @@ def _tracked_tickers(limit: int = 30):
     )
     tickers = [r["ticker"] for r in rows if r.get("ticker")]
     if not tickers:
-        tickers = Config.DEFAULT_TH_TICKERS[:5]
+        tickers = Config.DEFAULT_US_TICKERS[:5]   # เน้นตลาดสหรัฐเป็นหลัก
     return tickers
 
 

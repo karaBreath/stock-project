@@ -46,7 +46,7 @@ def _focus(result: dict, market: str) -> dict:
     return {"items": items, "market": market, "focus": focus}
 
 
-def sector_performance(market="th") -> dict:
+def sector_performance(market="us") -> dict:
     """เปรียบเทียบกลุ่มอุตสาหกรรม (sector rotation) ด้วย ETF/หุ้นตัวแทน"""
     cache_key = f"sector:{market}"
     cached = cache_get(cache_key)

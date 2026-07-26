@@ -65,7 +65,7 @@ function renderNav() {
 
 // ---------------- router ----------------
 const routes = window.routes = {};
-let currentMarket = 'th';
+let currentMarket = 'us';   // เน้นตลาดหุ้นสหรัฐเป็นหลัก (สลับเป็นไทยได้จาก chip)
 
 function go(view, param) {
   location.hash = param ? `#${view}/${encodeURIComponent(param)}` : `#${view}`;
@@ -97,8 +97,8 @@ routes.dashboard = async (app) => {
       <div class="grid cols-3" style="margin-bottom:16px">
         <div class="card" id="fgCard"><div class="card-title">Fear &amp; Greed Index</div>${loader('')}</div>
         <div class="card span-2"><div class="card-title">ปัจจัยมหภาค <span class="chips" style="margin:0">
-            <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span>
-            <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span></span></div>
+            <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span>
+            <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span></span></div>
           <div id="macroBox">${loader('')}</div></div>
       </div>
 
@@ -190,8 +190,8 @@ routes.screener = (app) => {
       <div class="page-sub">สแกนหุ้นไทย 300+ ตัว / US 500+ ตัว ครอบคลุมทุกกลุ่มอุตสาหกรรม</div>
       <div class="card" style="margin-bottom:16px">
         <div class="chips" style="margin-bottom:14px">
-          <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">หุ้นไทย (SET) 300+</span>
           <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">หุ้นสหรัฐ 500+</span>
+          <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">หุ้นไทย (SET) 300+</span>
         </div>
         <div class="form-grid">
           <div><label>P/E สูงสุด</label><input id="pe_max" type="number" placeholder="เช่น 20"></div>
@@ -826,8 +826,8 @@ function toolPosSize(b) {
 
 async function toolSector(b) {
   b.innerHTML = `<div class="chips" id="secMkt">
-      <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span>
-      <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span></div>
+      <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span>
+      <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span></div>
     <div class="card"><div class="card-title">ผลตอบแทนรายกลุ่มอุตสาหกรรม (1 เดือน)</div>
       <div class="chart-box tall"><canvas id="cSector"></canvas></div><div id="secTbl"></div></div>`;
   $$('#secMkt .chip').forEach(c => c.onclick = () => { currentMarket = c.dataset.mkt; $$('#secMkt .chip').forEach(x=>x.classList.toggle('active',x===c)); load(); });
@@ -851,8 +851,8 @@ routes.report = async (app) => {
     <div class="page-title">รายงานประจำวัน</div>
     <div class="page-sub">สรุปหุ้นน่าซื้อพร้อมจุดเข้า/ตัดขาดทุน/เป้าราคา + ภาวะตลาด</div>
     <div class="chips" id="repMkt">
-      <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span>
-      <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span></div>
+      <span class="chip ${currentMarket==='us'?'active':''}" data-mkt="us">สหรัฐ</span>
+      <span class="chip ${currentMarket==='th'?'active':''}" data-mkt="th">ไทย</span></div>
     <div id="repBody">${loader('กำลังสแกนตลาด…')}</div></div>`;
   $$('#repMkt .chip').forEach(c => c.onclick = () => { currentMarket = c.dataset.mkt; $$('#repMkt .chip').forEach(x=>x.classList.toggle('active',x===c)); load(); });
   load();

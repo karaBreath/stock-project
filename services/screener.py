@@ -43,7 +43,7 @@ def _fetch_one(ticker):
         return {"ok": False, "ticker": ticker}
 
 
-def screen(filters: dict, market="th") -> dict:
+def screen(filters: dict, market="us") -> dict:
     # ใช้ universe ที่ระบุหรือ universe เต็ม
     tickers = filters.get("tickers") or get_universe(market)
 

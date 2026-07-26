@@ -55,7 +55,7 @@ def search():
 @api.post("/screener")
 def screen():
     a = _args()
-    market = a.pop("market", "th")
+    market = a.pop("market", "us")
     return jsonify(screener.screen(a, market=market))
 
 
@@ -111,13 +111,13 @@ def macro_ep():
 # ---------------- 7) Sector ----------------
 @api.get("/sectors")
 def sectors_ep():
-    return jsonify(macro.sector_performance(request.args.get("market", "th")))
+    return jsonify(macro.sector_performance(request.args.get("market", "us")))
 
 
 # ---------------- 8) Daily report ----------------
 @api.get("/daily-report")
 def daily_report_ep():
-    return jsonify(daily_report.generate(request.args.get("market", "th"),
+    return jsonify(daily_report.generate(request.args.get("market", "us"),
                                          int(request.args.get("top", 5))))
 
 
