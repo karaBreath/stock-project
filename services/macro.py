@@ -2,6 +2,8 @@
 Macro service — ปัจจัยมหภาค: ทอง น้ำมัน ค่าเงิน ดอกเบี้ย ดัชนีตลาด ฯลฯ
 อิงสัญลักษณ์ใน Config.MACRO_SYMBOLS (ดึงจาก Yahoo Finance)
 """
+import time
+
 from config import Config
 from database import cache_get, cache_set
 from services import stock_data
@@ -17,9 +19,18 @@ def get_macro(market: str = "") -> dict:
     if cached:
         return _focus(cached, market)
 
+    def fetch(symbol):
+        q = stock_data.get_quote(symbol)
+        if not q.get("ok"):
+            # Yahoo ชอบ rate-limit ตอนยิงหลายตัวติดกัน (เจอบ่อยบนเซิร์ฟเวอร์ cloud)
+            # เว้นจังหวะแล้วลองอีกครั้ง ก่อนยอมแพ้
+            time.sleep(0.6)
+            q = stock_data.get_quote(symbol)
+        return q
+
     items = []
     for key, (symbol, label) in Config.MACRO_SYMBOLS.items():
-        q = stock_data.get_quote(symbol)
+        q = fetch(symbol)
         items.append({
             "key": key,
             "symbol": symbol,
@@ -31,7 +42,10 @@ def get_macro(market: str = "") -> dict:
         })
 
     result = {"items": items}
-    cache_set("macro:all", result, Config.MACRO_CACHE_TTL)
+    # ถ้ามีตัวที่ดึงไม่สำเร็จ อย่า cache นาน — ให้รอบหน้าได้ลองใหม่เร็ว ๆ
+    # (บั๊กเดิม: ค่า "—" ถูก cache ค้างเต็ม TTL ทั้งที่ Yahoo หายเป็นปกติแล้ว)
+    all_ok = all(i["ok"] for i in items)
+    cache_set("macro:all", result, Config.MACRO_CACHE_TTL if all_ok else 60)
     return _focus(result, market)
 
 
