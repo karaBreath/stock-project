@@ -31,19 +31,27 @@ _UA = "NEBULA-Stock-App/1.0 (educational stock research)"
 # ---------------------------------------------------------------------------
 # low-level fetch
 # ---------------------------------------------------------------------------
-def _fetch_json(path: str, params: dict):
-    """เรียก GDELT แล้วคืน dict; คืน None ถ้าล้มเหลว (GDELT บางทีตอบ text ไม่ใช่ json)"""
+def _fetch_json(path: str, params: dict, retries: int = 1):
+    """
+    เรียก GDELT แล้วคืน dict; คืน None ถ้าล้มเหลว (GDELT บางทีตอบ text ไม่ใช่ json)
+    GDELT throttle ต่อ IP ค่อนข้างแรง (โดยเฉพาะ IP ของ cloud ที่ใช้ร่วมกันหลายคน)
+    จึงลองซ้ำ 1 ครั้งแบบเว้นจังหวะ ก่อนยอมแพ้
+    """
     if not _REQ_OK:
         return None
     url = f"{Config.GDELT_BASE}/{path}"
-    try:
-        r = requests.get(url, params=params, timeout=Config.GDELT_TIMEOUT,
-                         headers={"User-Agent": _UA})
-        if r.status_code != 200 or not r.text.strip():
-            return None
-        return r.json()
-    except Exception:
-        return None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, params=params, timeout=Config.GDELT_TIMEOUT,
+                             headers={"User-Agent": _UA})
+            if r.status_code == 200 and r.text.strip():
+                return r.json()
+        except Exception:
+            pass
+        if attempt < retries:
+            import time
+            time.sleep(2.0)
+    return None
 
 
 def _day_of(stamp: str) -> str:
