@@ -91,7 +91,7 @@ def _throttle():
 # ---------------------------------------------------------------------------
 # low-level fetch
 # ---------------------------------------------------------------------------
-def _fetch_json(path: str, params: dict, retries: int = 1):
+def _fetch_json(path: str, params: dict, retries: int = 1, timeout: int = None):
     """
     เรียก GDELT แล้วคืน dict; คืน None ถ้าล้มเหลว (GDELT บางทีตอบ text ไม่ใช่ json)
 
@@ -110,7 +110,8 @@ def _fetch_json(path: str, params: dict, retries: int = 1):
         if not _throttle():
             return None                     # อยู่ในช่วงพักหลังโดน 429 — อย่าซ้ำเติม
         try:
-            r = requests.get(url, params=params, timeout=Config.GDELT_TIMEOUT,
+            r = requests.get(url, params=params,
+                             timeout=timeout or Config.GDELT_TIMEOUT,
                              headers={"User-Agent": _UA})
             if r.status_code == 200 and r.text.strip():
                 return r.json()
@@ -533,12 +534,25 @@ def stock_tone(ticker: str, name: str = "", timespan: str = "7d") -> dict:
     """
     หา tone ข่าวของหุ้นตัวหนึ่ง แล้วแปลงเป็นคะแนน 0-100
     tone ปกติอยู่ราว -10..+10 -> map เป็น 0..100 (0 tone = 50 คะแนน)
+
+    เรียกจากหน้าวิเคราะห์ที่ผู้ใช้นั่งรออยู่ จึงตั้งเวลารอสั้นและไม่ลองซ้ำ
+    ถ้า GDELT ช้า/ไม่ตอบ ให้ถอยไปใช้ sentiment จากพาดหัวข่าวแทนทันที
     """
     base = (name or "").strip() or ticker.replace(".BK", "")
     q = f'"{base}"' if " " in base else base
 
-    tl = tone_timeline(q, timespan=timespan)
-    ser = tl.get("series") or {}
+    span = _clamp_timespan(timespan)
+    cache_key = f"gdelt:tone:{q}:{span}"
+    cached = cache_get(cache_key)
+    if cached:
+        ser = cached.get("series") or {}
+    else:
+        ser = _parse_timeline(_fetch_json(
+            "doc/doc",
+            {"query": q, "mode": "TimelineTone", "format": "json", "timespan": span},
+            retries=0, timeout=Config.GDELT_TIMEOUT_FAST))
+        if ser:
+            cache_set(cache_key, {"series": ser}, Config.GDELT_TIMELINE_CACHE_TTL)
     if not ser:
         return {"ok": False, "ticker": ticker, "query": q,
                 "tone": None, "score": None, "days": 0}

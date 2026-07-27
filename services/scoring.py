@@ -2,6 +2,8 @@
 Unified scoring — รวมคะแนนพื้นฐาน + เทคนิคัล + sentiment เป็นคะแนนรวม 0-100
 พร้อมคำแนะนำ (ซื้อ/ถือ/ขาย) จุดเข้า จุดตัดขาดทุน และเป้าราคา
 """
+from concurrent.futures import ThreadPoolExecutor
+
 from services import (fundamental, technical, sentiment as sentiment_svc,
                       stock_data, correlation, volume_profile)
 
@@ -10,16 +12,42 @@ from services import (fundamental, technical, sentiment as sentiment_svc,
 WEIGHTS = {"fundamental": 0.45, "technical": 0.35, "sentiment": 0.20}
 
 
+def _safe(fn, fallback):
+    """เรียกฟังก์ชันที่ต้องต่อเน็ต — ล้มแล้วคืนค่าสำรอง ไม่ให้ทั้งหน้าพัง"""
+    try:
+        return fn()
+    except Exception:
+        return fallback
+
+
 def overall(ticker: str, deep: bool = True) -> dict:
     """
     คะแนนรวม 0-100
 
     deep=False -> ข้ามการเรียก GDELT รายหุ้น (ใช้ตอนสแกนหลายสิบตัว)
     ส่วน catalyst ยังทำงานปกติเพราะอ่านจาก DB + สภาพข่าวโลกที่ cache ไว้แล้ว
+
+    ทั้ง 4 ส่วน (พื้นฐาน/เทคนิคัล/ข่าว/volume) ไม่ต้องพึ่งผลของกันและกัน
+    จึงดึงพร้อมกัน — เวลารวมเท่ากับตัวที่ช้าที่สุด ไม่ใช่ผลรวมของทุกตัว
+    (เดิมเรียงต่อกันทีละตัว ทำให้หน้าวิเคราะห์ค้างนานเมื่อแหล่งใดแหล่งหนึ่งช้า)
     """
-    fund = fundamental.analyze(ticker)
-    tech = technical.analyze(ticker)
-    senti = sentiment_svc.stock_sentiment(ticker, deep=deep)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_fund = ex.submit(_safe, lambda: fundamental.analyze(ticker),
+                           {"quote": {}, "fund_score": 50})
+        f_tech = ex.submit(_safe, lambda: technical.analyze(ticker), {"tech_score": 50})
+        f_senti = ex.submit(_safe,
+                            lambda: sentiment_svc.stock_sentiment(ticker, deep=deep),
+                            {"sentiment_score": 50, "summary": {}})
+        f_vp = ex.submit(_safe, lambda: volume_profile._score_component(ticker),
+                         {"ok": False, "adjust": 0, "setup": None}) if deep else None
+
+        fund = f_fund.result()
+        tech = f_tech.result()
+        senti = f_senti.result()
+        vp = (f_vp.result() if f_vp is not None
+              else {"ok": False, "adjust": 0, "setup": None, "skipped": True})
+
+    fund.setdefault("quote", {})
 
     f_score = fund.get("fund_score", 50)
     t_score = tech.get("tech_score", 50)
@@ -43,13 +71,6 @@ def overall(ticker: str, deep: bool = True) -> dict:
     # ---- ติดอาวุธ Volume Profile: setup VAB/VAR เพิ่มคะแนน (สูงสุด +8) ----
     # ทำเฉพาะ deep=True (build_profile ต้องดึงราคา intraday) และเฉพาะหุ้น
     # ที่เข้า setup จริง + ผ่าน 3 ประตู (ไม่ถูก gate / backtest บวก / R:R>=1.2)
-    if deep:
-        try:
-            vp = volume_profile._score_component(ticker)
-        except Exception:
-            vp = {"ok": False, "adjust": 0, "setup": None}
-    else:
-        vp = {"ok": False, "adjust": 0, "setup": None, "skipped": True}
     vp_adjust = vp.get("adjust", 0) or 0
 
     # รวมส่วนปรับทั้งหมด แต่จำกัดไม่ให้เกิน ±14 (กันคะแนนแกว่งเกินเหตุ)

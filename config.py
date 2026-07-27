@@ -65,6 +65,8 @@ class Config:
     # --- GDELT (ข่าวทั่วโลก 65 ภาษา · ฟรี ไม่ต้องใช้ API key) ---
     GDELT_BASE = os.environ.get("GDELT_BASE", "https://api.gdeltproject.org/api/v2")
     GDELT_TIMEOUT = int(os.environ.get("GDELT_TIMEOUT", "35"))
+    # ใช้ตอนที่ผู้ใช้นั่งรอหน้าเว็บอยู่ — ยอมได้ข้อมูลไม่ครบ ดีกว่าให้รอนาน
+    GDELT_TIMEOUT_FAST = int(os.environ.get("GDELT_TIMEOUT_FAST", "10"))
     # จุดบนลูกโลก: ตั้งยาวกว่ารอบเก็บข้อมูลเบื้องหลัง เพื่อให้ cache อุ่นเสมอ
     GDELT_CACHE_TTL = int(os.environ.get("GDELT_CACHE_TTL", "5400"))
     GDELT_TIMELINE_CACHE_TTL = int(os.environ.get("GDELT_TIMELINE_CACHE_TTL", "3600"))

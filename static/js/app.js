@@ -8,11 +8,39 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 
+// ทุกคำขอมีเวลาจำกัด — ถ้าแหล่งข้อมูลภายนอกค้าง ต้องไม่ปล่อยให้หน้าหมุนไม่จบ
+const API_TIMEOUT_MS = 75000;
+
 async function api(path, opts = {}) {
   const o = { headers: { 'Content-Type': 'application/json' }, ...opts };
   if (o.body && typeof o.body !== 'string') o.body = JSON.stringify(o.body);
-  const r = await fetch('/api' + path, o);
-  return r.json();
+
+  const ctrl = new AbortController();
+  const ms = o.timeout || API_TIMEOUT_MS;
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch('/api' + path, { ...o, signal: ctrl.signal });
+    return await r.json();
+  } catch (e) {
+    const timedOut = e.name === 'AbortError';
+    return {
+      ok: false,
+      timeout: timedOut,
+      error: timedOut
+        ? `ใช้เวลานานเกิน ${Math.round(ms / 1000)} วินาที — แหล่งข้อมูลภายนอกอาจกำลังช้า ลองใหม่อีกครั้ง`
+        : 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// เขียนลง DOM แบบปลอดภัย — คำขอที่ค้างอยู่อาจตอบกลับ "หลัง" ผู้ใช้เปลี่ยนหน้าไปแล้ว
+// ตอนนั้นองค์ประกอบเดิมถูกลบทิ้ง การเขียนตรง ๆ จะทำให้เกิด error ทั้งหน้า
+function setHTML(sel, html) {
+  const el = typeof sel === 'string' ? $(sel) : sel;
+  if (el) el.innerHTML = html;
+  return el;
 }
 
 function toast(msg, ms = 2800) {
@@ -57,10 +85,10 @@ const NAV = [
 ];
 
 function renderNav() {
-  $('#sideNav').innerHTML = NAV.map(n =>
-    `<div class="nav-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join('');
-  $('#bottomNav').innerHTML = NAV.filter(n => n.bottom).map(n =>
-    `<div class="bn-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join('');
+  setHTML('#sideNav', NAV.map(n =>
+    `<div class="nav-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join(''));
+  setHTML('#bottomNav', NAV.filter(n => n.bottom).map(n =>
+    `<div class="bn-item" data-go="${n.id}"><span class="ic">${n.ic}</span><span>${n.label}</span></div>`).join(''));
 }
 
 // ---------------- router ----------------
@@ -122,7 +150,7 @@ routes.dashboard = async (app) => {
   // fear & greed
   api(`/fear-greed?market=${currentMarket}`).then(fg => {
     const col = fg.score >= 55 ? 'var(--up)' : fg.score <= 45 ? 'var(--down)' : 'var(--neon-purple)';
-    $('#fgCard').innerHTML = `<div class="card-title">Fear &amp; Greed Index</div>
+    setHTML('#fgCard', `<div class="card-title">Fear &amp; Greed Index</div>
       <div class="fg-meter">
         <div class="fg-score" style="color:${col}">${fg.score}</div>
         <div class="muted">${fg.label}</div>
@@ -130,52 +158,52 @@ routes.dashboard = async (app) => {
         <div class="small muted" style="margin-top:10px;text-align:left">
           ${Object.entries(fg.components||{}).map(([k,v])=>`<div class="stat-row"><span class="k">${({momentum:'โมเมนตัม',volatility:'ความผันผวน',safe_haven_gold:'ทองคำ (safe haven)'})[k]||k}</span><span class="v ${cls(v)}">${pf(v)}</span></div>`).join('')}
         </div>
-      </div>`;
+      </div>`);
   });
 
   // macro
   api(`/macro?market=${currentMarket}`).then(m => {
-    $('#macroBox').innerHTML = `<div class="grid cols-4">${m.items.map(it => `
+    setHTML('#macroBox', `<div class="grid cols-4">${m.items.map(it => `
       <div class="card ticker-card" style="padding:12px">
         <div class="nm">${it.label}</div>
         <div class="px">${nf(it.price, 2)}</div>
         <div class="small ${cls(it.change_pct)}">${arrow(it.change_pct)} ${pf(it.change_pct)}</div>
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div>`);
   });
 
   // top buys
   api(`/daily-report?market=${currentMarket}&top=5`).then(r => {
     const rows = r.top_buys || [];
-    $('#topBuys').innerHTML = rows.length ? rows.map(s => `
+    setHTML('#topBuys', rows.length ? rows.map(s => `
       <div class="stat-row ticker-card" data-go="analyze/${s.ticker}" style="cursor:pointer">
         <span><b class="mono">${s.ticker}</b> <span class="muted small">${(s.name||'').slice(0,18)}</span></span>
         <span><span class="pill ${s.total_score>=70?'buy':s.total_score>=45?'hold':'sell'}">${s.total_score}</span></span>
-      </div>`).join('') : emptyState('🔍', 'ยังไม่มีหุ้นเข้าเกณฑ์');
+      </div>`).join('') : emptyState('🔍', 'ยังไม่มีหุ้นเข้าเกณฑ์'));
     $$('#topBuys [data-go]').forEach(x => x.onclick = () => go('analyze', x.dataset.go.split('/')[1]));
   });
 
   // news
   api('/news?limit=7').then(n => {
-    $('#newsBox').innerHTML = (n.items||[]).map(i => `
+    setHTML('#newsBox', (n.items||[]).map(i => `
       <a class="news-item" href="${i.link}" target="_blank" rel="noopener">
         <div class="nh">${i.title}</div>
         <div class="nm"><span class="pill ${({positive:'pos',negative:'neg',neutral:'neu'})[i.sentiment]}">${({positive:'บวก',negative:'ลบ',neutral:'กลาง'})[i.sentiment]}</span> ${i.source||''}</div>
-      </a>`).join('');
+      </a>`).join(''));
   });
 
   loadWatch();
   async function loadWatch() {
     const w = await api('/watchlist');
     const tickers = (w.watchlist||[]).map(x => x.ticker);
-    if (!tickers.length) { $('#watchBox').innerHTML = emptyState('⭐', 'ยังไม่มีหุ้นในรายการเฝ้าดู — กด "เพิ่ม"'); return; }
+    if (!tickers.length) { setHTML('#watchBox', emptyState('⭐', 'ยังไม่มีหุ้นในรายการเฝ้าดู — กด "เพิ่ม"')); return; }
     const { quotes } = await api('/quotes', { method: 'POST', body: { tickers } });
-    $('#watchBox').innerHTML = `<div class="grid cols-4">${quotes.map(q => `
+    setHTML('#watchBox', `<div class="grid cols-4">${quotes.map(q => `
       <div class="card ticker-card" data-t="${q.ticker}">
         <div class="sym">${q.ticker}</div>
         <div class="nm">${(q.name||'').slice(0,20)}</div>
         <div class="px">${nf(q.price)}</div>
         <div class="small ${cls(q.change_pct)}">${arrow(q.change_pct)} ${pf(q.change_pct)}</div>
-      </div>`).join('')}</div>`;
+      </div>`).join('')}</div>`);
     $$('#watchBox [data-t]').forEach(c => c.onclick = () => go('analyze', c.dataset.t));
   }
 };
@@ -334,23 +362,36 @@ routes.analyze = async (app, ticker) => {
       <div class="page-sub">พิมพ์ชื่อหุ้นในช่องค้นหาด้านบน หรือเลือกจากตัวอย่าง</div>
       <div class="card"><div id="examples">${loader('')}</div></div></div>`;
     const d = await api('/defaults');
-    $('#examples').innerHTML = `<div class="chips">${[...d.th, ...d.us].map(t => `<span class="chip" data-t="${t}">${t}</span>`).join('')}</div>`;
+    setHTML('#examples', `<div class="chips">${[...d.th, ...d.us].map(t => `<span class="chip" data-t="${t}">${t}</span>`).join('')}</div>`);
     $$('#examples .chip').forEach(c => c.onclick = () => go('analyze', c.dataset.t));
     return;
   }
 
-  app.innerHTML = `<div class="view active" id="analyzeView">${loader('กำลังวิเคราะห์ '+ticker+' …')}</div>`;
+  app.innerHTML = `<div class="view active" id="analyzeView">${
+    loader('กำลังวิเคราะห์ ' + ticker + ' … (ดึงพื้นฐาน เทคนิคัล ข่าว และ volume พร้อมกัน)')}</div>`;
   const score = await api('/score/' + encodeURIComponent(ticker));
+  if (!$('#analyzeView')) return;                      // ผู้ใช้เปลี่ยนหน้าไปแล้ว
+
   if (!score || score.price === null || score.error) {
+    if (score && score.timeout) {
+      setHTML('#analyzeView', `<div class="card">
+        ${emptyState('⏳', score.error)}
+        <div style="text-align:center;margin-top:10px">
+          <button class="btn" id="anRetry">ลองใหม่</button>
+        </div></div>`);
+      $('#anRetry').onclick = () => routes.analyze(app, ticker);
+      return;
+    }
     const isTH = ticker.toUpperCase().endsWith('.BK');
     const hint = isTH ? '' : ' — หุ้นไทยลงท้าย .BK เช่น PTT.BK, หุ้นสหรัฐใช้สัญลักษณ์ตรงๆ เช่น AAPL';
-    $('#analyzeView').innerHTML = emptyState('⚠️', `ไม่พบข้อมูลหุ้น ${ticker}${hint}`);
+    setHTML('#analyzeView', emptyState('⚠️',
+      (score && score.error) ? score.error : `ไม่พบข้อมูลหุ้น ${ticker}${hint}`));
     return;
   }
   const b = score.breakdown, lv = score.levels || {};
   const recCls = score.total_score>=70?'buy':score.total_score>=45?'hold':'sell';
 
-  $('#analyzeView').innerHTML = `
+  setHTML('#analyzeView', `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:8px">
       <div>
         <div class="page-title">${score.name} <span class="muted mono" style="font-size:18px">${score.ticker}</span></div>
@@ -388,7 +429,7 @@ routes.analyze = async (app, ticker) => {
       <div class="tab" data-tab="news">ข่าว &amp; Sentiment</div>
       <div class="tab" data-tab="institutional">เงินสถาบัน</div>
     </div>
-    <div id="tabBody"></div>`;
+    <div id="tabBody"></div>`);
 
   $('#watchAdd').onclick = async () => { await api('/watchlist', { method: 'POST', body: { ticker } }); toast('เพิ่มเข้ารายการเฝ้าดูแล้ว'); };
   $$('#aTabs .tab').forEach(t => t.onclick = () => { $$('#aTabs .tab').forEach(x => x.classList.toggle('active', x===t)); loadTab(t.dataset.tab); });
@@ -429,10 +470,10 @@ async function renderTechnical(body, ticker) {
   load('1y');
   async function load(period) {
     const t = await api(`/technical/${encodeURIComponent(ticker)}?period=${period}`);
-    if (!t.ok) { $('#techSig').innerHTML = emptyState('⚠️', t.error||'ไม่มีข้อมูล'); return; }
+    if (!t.ok) { setHTML('#techSig', emptyState('⚠️', t.error||'ไม่มีข้อมูล')); return; }
     priceChart('cPrice', t.indicators); rsiChart('cRsi', t.indicators); macdChart('cMacd', t.indicators);
-    $('#techSig').innerHTML = (t.signals||[]).map(s => `<div class="sig-item"><div class="dot ${s.signal==='ซื้อ'?'buy':s.signal==='ขาย'?'sell':'hold'}"></div>
-      <div><b>${s.name}</b> <span class="pill ${s.signal==='ซื้อ'?'buy':s.signal==='ขาย'?'sell':'hold'}">${s.signal}</span><div class="muted small">${s.desc}</div></div></div>`).join('');
+    setHTML('#techSig', (t.signals||[]).map(s => `<div class="sig-item"><div class="dot ${s.signal==='ซื้อ'?'buy':s.signal==='ขาย'?'sell':'hold'}"></div>
+      <div><b>${s.name}</b> <span class="pill ${s.signal==='ซื้อ'?'buy':s.signal==='ขาย'?'sell':'hold'}">${s.signal}</span><div class="muted small">${s.desc}</div></div></div>`).join(''));
   }
 }
 
@@ -475,15 +516,15 @@ async function renderFundamental(body, ticker) {
   $('#cmpBtn').onclick = async () => {
     const t = prompt('ใส่สัญลักษณ์หุ้นที่ต้องการเทียบ (คั่นด้วยจุลภาค):', ticker);
     if (!t) return;
-    $('#cmpBox').innerHTML = loader('');
+    setHTML('#cmpBox', loader(''));
     const tickers = t.split(',').map(x=>x.trim()).filter(Boolean);
     const r = await api('/compare', { method:'POST', body:{ tickers } });
-    $('#cmpBox').innerHTML = `<div class="table-scroll"><table class="tbl"><thead><tr>
+    setHTML('#cmpBox', `<div class="table-scroll"><table class="tbl"><thead><tr>
       <th>หุ้น</th><th>ราคา</th><th>P/E</th><th>P/B</th><th>ROE</th><th>D/E</th><th>กำไร%</th><th>ปันผล</th><th>คะแนน</th></tr></thead>
       <tbody>${r.rows.map(s=>`<tr data-t="${s.ticker}"><td><b class="mono">${s.ticker}</b></td><td>${nf(s.price)}</td>
         <td>${nf(s.pe,1)}</td><td>${nf(s.pb,2)}</td><td>${nf(asPct(s.roe),1)}%</td><td>${nf(asDE(s.debt_to_equity),2)}</td>
         <td>${nf(asPct(s.profit_margin),1)}%</td><td>${nf(asPct(s.dividend_yield),2)}%</td>
-        <td><span class="pill ${s.fund_score>=65?'buy':s.fund_score>=45?'hold':'sell'}">${s.fund_score}</span></td></tr>`).join('')}</tbody></table></div>`;
+        <td><span class="pill ${s.fund_score>=65?'buy':s.fund_score>=45?'hold':'sell'}">${s.fund_score}</span></td></tr>`).join('')}</tbody></table></div>`);
     $$('#cmpBox tr[data-t]').forEach(tr=>tr.onclick=()=>go('analyze',tr.dataset.t));
   };
 }
@@ -494,15 +535,15 @@ async function renderNews(body, ticker) {
     <div class="card"><div class="card-title">หัวข้อข่าว</div><div id="newsList">${loader('')}</div></div></div>`;
   const s = await api('/sentiment/' + encodeURIComponent(ticker));
   const col = s.sentiment_score>=55?'var(--up)':s.sentiment_score<=45?'var(--down)':'var(--neon-purple)';
-  $('#sentBox').innerHTML = `<div class="fg-meter"><div class="fg-score" style="color:${col}">${s.sentiment_score}</div>
+  setHTML('#sentBox', `<div class="fg-meter"><div class="fg-score" style="color:${col}">${s.sentiment_score}</div>
     <div class="muted">คะแนน Sentiment (0-100)</div>
     <div class="bar-track" style="margin-top:12px"><div class="bar-fill" style="width:${s.sentiment_score}%;background:${col}"></div></div>
     <div class="grid cols-3" style="margin-top:16px">
       <div><div class="stat-big up">${s.summary.positive}</div><div class="small muted">ข่าวบวก</div></div>
       <div><div class="stat-big">${s.summary.neutral}</div><div class="small muted">กลาง</div></div>
-      <div><div class="stat-big down">${s.summary.negative}</div><div class="small muted">ข่าวลบ</div></div></div></div>`;
-  $('#newsList').innerHTML = (s.headlines||[]).map(i => `<a class="news-item" href="${i.link}" target="_blank" rel="noopener">
-    <div class="nh">${i.title}</div><div class="nm"><span class="pill ${({positive:'pos',negative:'neg',neutral:'neu'})[i.sentiment]}">${({positive:'บวก',negative:'ลบ',neutral:'กลาง'})[i.sentiment]}</span> ${i.source||''}</div></a>`).join('');
+      <div><div class="stat-big down">${s.summary.negative}</div><div class="small muted">ข่าวลบ</div></div></div></div>`);
+  setHTML('#newsList', (s.headlines||[]).map(i => `<a class="news-item" href="${i.link}" target="_blank" rel="noopener">
+    <div class="nh">${i.title}</div><div class="nm"><span class="pill ${({positive:'pos',negative:'neg',neutral:'neu'})[i.sentiment]}">${({positive:'บวก',negative:'ลบ',neutral:'กลาง'})[i.sentiment]}</span> ${i.source||''}</div></a>`).join(''));
 }
 
 async function renderInstitutional(body, ticker) {
@@ -646,35 +687,35 @@ routes.portfolio = async (app) => {
   async function load() {
     const p = await api('/portfolio');
     const t = p.totals;
-    $('#pSummary').innerHTML = `<div class="grid cols-4">
+    setHTML('#pSummary', `<div class="grid cols-4">
       <div class="card"><div class="card-title">มูลค่าพอร์ต</div><div class="stat-big">${nf(t.value)}</div></div>
       <div class="card"><div class="card-title">ต้นทุนรวม</div><div class="stat-big">${nf(t.cost)}</div></div>
       <div class="card"><div class="card-title">กำไร/ขาดทุน</div><div class="stat-big ${cls(t.pnl)}">${nf(t.pnl)}</div></div>
-      <div class="card"><div class="card-title">ผลตอบแทน</div><div class="stat-big ${cls(t.pnl_pct)}">${pf(t.pnl_pct)}</div></div></div>`;
+      <div class="card"><div class="card-title">ผลตอบแทน</div><div class="stat-big ${cls(t.pnl_pct)}">${pf(t.pnl_pct)}</div></div></div>`);
 
     if (!p.holdings.length) {
-      $('#holdings').innerHTML = emptyState('💼', 'ยังไม่มีหุ้นในพอร์ต — เพิ่มด้านบน');
-      $('#riskBox').innerHTML = emptyState('🛡️','เพิ่มหุ้นเพื่อดูความเสี่ยง'); return;
+      setHTML('#holdings', emptyState('💼', 'ยังไม่มีหุ้นในพอร์ต — เพิ่มด้านบน'));
+      setHTML('#riskBox', emptyState('🛡️','เพิ่มหุ้นเพื่อดูความเสี่ยง')); return;
     }
-    $('#holdings').innerHTML = `<div class="table-scroll"><table class="tbl"><thead><tr>
+    setHTML('#holdings', `<div class="table-scroll"><table class="tbl"><thead><tr>
       <th>หุ้น</th><th>จำนวน</th><th>ราคาซื้อ</th><th>ราคาปัจจุบัน</th><th>มูลค่า</th><th>กำไร/ขาดทุน</th><th>%</th><th>น้ำหนัก</th><th></th></tr></thead>
       <tbody>${p.holdings.map(h=>`<tr><td><b class="mono">${h.ticker}</b><div class="muted small">${(h.name||'').slice(0,18)}</div></td>
         <td>${nf(h.shares,0)}</td><td>${nf(h.buy_price)}</td><td>${nf(h.current_price)}</td><td>${nf(h.value)}</td>
         <td class="${cls(h.pnl)}">${nf(h.pnl)}</td><td class="${cls(h.pnl_pct)}">${pf(h.pnl_pct)}</td><td>${nf(h.weight,1)}%</td>
-        <td><button class="btn ghost sm" data-del="${h.id}">✕</button></td></tr>`).join('')}</tbody></table></div>`;
+        <td><button class="btn ghost sm" data-del="${h.id}">✕</button></td></tr>`).join('')}</tbody></table></div>`);
     $$('#holdings [data-del]').forEach(b => b.onclick = async () => { await api('/portfolio/'+b.dataset.del, { method:'DELETE' }); toast('ลบแล้ว'); load(); });
 
     doughnut('cAlloc', p.holdings.map(h=>h.ticker), p.holdings.map(h=>h.value));
 
     const risk = await api('/risk');
     if (risk.ok) {
-      $('#riskBox').innerHTML = `<div class="grid cols-2" style="gap:10px">
+      setHTML('#riskBox', `<div class="grid cols-2" style="gap:10px">
         ${row('ความผันผวน/ปี', nf(risk.portfolio_volatility,1)+'%')}
         ${row('Beta พอร์ต', nf(risk.portfolio_beta,2))}
         ${row('คะแนนกระจายเสี่ยง', nf(risk.diversification_score,0))}
         ${row('ระดับความเสี่ยง', risk.risk_level)}</div>
-        <div style="margin-top:12px">${risk.recommendations.map(r=>`<div class="sig-item"><div class="dot hold"></div><div class="small">${r}</div></div>`).join('')}</div>`;
-    } else { $('#riskBox').innerHTML = `<div class="muted small">${risk.message||''}</div>`; }
+        <div style="margin-top:12px">${risk.recommendations.map(r=>`<div class="sig-item"><div class="dot hold"></div><div class="small">${r}</div></div>`).join('')}</div>`);
+    } else { setHTML('#riskBox', `<div class="muted small">${risk.message||''}</div>`); }
   }
 };
 
@@ -753,15 +794,15 @@ function toolBacktest(b) {
     <div id="btResult">${emptyState('🧪','ตั้งค่าแล้วกด "ทดสอบ"')}</div>`;
   $('#bt_run').onclick = async () => {
     const ticker = $('#bt_ticker').value.trim(); if (!ticker) { toast('ใส่ชื่อหุ้น'); return; }
-    $('#btResult').innerHTML = loader('กำลัง backtest…');
+    setHTML('#btResult', loader('กำลัง backtest…'));
     const r = await api('/backtest', { method:'POST', body:{ ticker, strategy: $('#bt_strat').value, period: $('#bt_period').value } });
-    if (!r.ok) { $('#btResult').innerHTML = emptyState('⚠️', r.message||'ทำไม่สำเร็จ'); return; }
-    $('#btResult').innerHTML = `<div class="grid cols-4" style="margin-bottom:16px">
+    if (!r.ok) { setHTML('#btResult', emptyState('⚠️', r.message||'ทำไม่สำเร็จ')); return; }
+    setHTML('#btResult', `<div class="grid cols-4" style="margin-bottom:16px">
       <div class="card"><div class="card-title">ผลตอบแทนกลยุทธ์</div><div class="stat-big ${cls(r.total_return_pct)}">${pf(r.total_return_pct)}</div></div>
       <div class="card"><div class="card-title">Buy &amp; Hold</div><div class="stat-big ${cls(r.buyhold_return_pct)}">${pf(r.buyhold_return_pct)}</div></div>
       <div class="card"><div class="card-title">Win Rate</div><div class="stat-big">${nf(r.win_rate,1)}%</div><div class="small muted">${r.num_trades} เทรด</div></div>
       <div class="card"><div class="card-title">Max Drawdown</div><div class="stat-big down">${pf(r.max_drawdown_pct)}</div></div></div>
-    <div class="card"><div class="card-title">Equity Curve</div><div class="chart-box tall"><canvas id="cEquity"></canvas></div></div>`;
+    <div class="card"><div class="card-title">Equity Curve</div><div class="chart-box tall"><canvas id="cEquity"></canvas></div></div>`);
     equityChart('cEquity', r.curve);
   };
 }
@@ -792,11 +833,11 @@ async function toolAlerts(b) {
   loadAlerts();
   async function loadAlerts() {
     const r = await api('/alerts');
-    $('#alertList').innerHTML = r.alerts.length ? `<div class="table-scroll"><table class="tbl"><thead><tr><th>หุ้น</th><th>เงื่อนไข</th><th>เป้า</th><th>สถานะ</th><th></th></tr></thead>
+    setHTML('#alertList', r.alerts.length ? `<div class="table-scroll"><table class="tbl"><thead><tr><th>หุ้น</th><th>เงื่อนไข</th><th>เป้า</th><th>สถานะ</th><th></th></tr></thead>
       <tbody>${r.alerts.map(a=>`<tr><td><b class="mono">${a.ticker}</b></td>
         <td>${({above:'ทะลุเหนือ',below:'ต่ำกว่า',rsi_above:'RSI >',rsi_below:'RSI <'})[a.condition]}</td><td>${nf(a.target)}</td>
         <td>${a.active?'<span class="pill hold">รออยู่</span>':'<span class="pill buy">แจ้งแล้ว</span>'}</td>
-        <td><button class="btn ghost sm" data-del="${a.id}">✕</button></td></tr>`).join('')}</tbody></table></div>` : emptyState('🔔','ยังไม่มีการแจ้งเตือน');
+        <td><button class="btn ghost sm" data-del="${a.id}">✕</button></td></tr>`).join('')}</tbody></table></div>` : emptyState('🔔','ยังไม่มีการแจ้งเตือน'));
     $$('#alertList [data-del]').forEach(x=>x.onclick=async()=>{ await api('/alerts/'+x.dataset.del,{method:'DELETE'}); loadAlerts(); });
   }
 }
@@ -815,12 +856,12 @@ function toolPosSize(b) {
     <div id="psResult" style="margin-top:16px"></div></div>`;
   $('#ps_calc').onclick = async () => {
     const r = await api('/risk/position-size', { method:'POST', body:{ account_size:$('#ps_acc').value, risk_pct:$('#ps_risk').value, entry:$('#ps_entry').value, stop_loss:$('#ps_stop').value } });
-    if (!r.ok) { $('#psResult').innerHTML = `<div class="muted">${r.message}</div>`; return; }
-    $('#psResult').innerHTML = `<div class="grid cols-2" style="gap:10px">
+    if (!r.ok) { setHTML('#psResult', `<div class="muted">${r.message}</div>`); return; }
+    setHTML('#psResult', `<div class="grid cols-2" style="gap:10px">
       ${row('จำนวนหุ้นที่ควรซื้อ', '<b>'+nf(r.shares,0)+'</b> หุ้น')}
       ${row('มูลค่าการลงทุน', nf(r.position_value)+' ('+nf(r.position_pct,1)+'% ของพอร์ต)')}
       ${row('เงินเสี่ยงต่อไม้', nf(r.risk_amount))}
-      ${row('ความเสี่ยงต่อหุ้น', nf(r.per_share_risk))}</div>`;
+      ${row('ความเสี่ยงต่อหุ้น', nf(r.per_share_risk))}</div>`);
   };
 }
 
@@ -833,12 +874,12 @@ async function toolSector(b) {
   $$('#secMkt .chip').forEach(c => c.onclick = () => { currentMarket = c.dataset.mkt; $$('#secMkt .chip').forEach(x=>x.classList.toggle('active',x===c)); load(); });
   load();
   async function load() {
-    $('#secTbl').innerHTML = loader('');
+    setHTML('#secTbl', loader(''));
     const r = await api('/sectors?market=' + currentMarket);
     barChart('cSector', r.rows.map(x=>x.sector), r.rows.map(x=>x.perf_1m??0), '% 1 เดือน');
-    $('#secTbl').innerHTML = `<div class="table-scroll" style="margin-top:12px"><table class="tbl"><thead><tr><th>กลุ่ม</th><th>ตัวแทน</th><th>1 เดือน</th><th>3 เดือน</th></tr></thead>
+    setHTML('#secTbl', `<div class="table-scroll" style="margin-top:12px"><table class="tbl"><thead><tr><th>กลุ่ม</th><th>ตัวแทน</th><th>1 เดือน</th><th>3 เดือน</th></tr></thead>
       <tbody>${r.rows.map(x=>`<tr data-t="${x.symbol}"><td>${x.sector}</td><td class="mono">${x.symbol}</td>
-        <td class="${cls(x.perf_1m)}">${pf(x.perf_1m)}</td><td class="${cls(x.perf_3m)}">${pf(x.perf_3m)}</td></tr>`).join('')}</tbody></table></div>`;
+        <td class="${cls(x.perf_1m)}">${pf(x.perf_1m)}</td><td class="${cls(x.perf_3m)}">${pf(x.perf_3m)}</td></tr>`).join('')}</tbody></table></div>`);
     $$('#secTbl tr[data-t]').forEach(tr=>tr.onclick=()=>go('analyze',tr.dataset.t));
   }
 }
@@ -857,10 +898,10 @@ routes.report = async (app) => {
   $$('#repMkt .chip').forEach(c => c.onclick = () => { currentMarket = c.dataset.mkt; $$('#repMkt .chip').forEach(x=>x.classList.toggle('active',x===c)); load(); });
   load();
   async function load() {
-    $('#repBody').innerHTML = loader('กำลังสแกนตลาด…');
+    setHTML('#repBody', loader('กำลังสแกนตลาด…'));
     const r = await api(`/daily-report?market=${currentMarket}&top=5`);
     const fg = r.fear_greed || {};
-    $('#repBody').innerHTML = `
+    setHTML('#repBody', `
       <div class="grid cols-2" style="margin-bottom:16px">
         <div class="card"><div class="card-title">ภาวะตลาด (${r.date})</div>
           <div class="stat-row"><span class="k">Fear &amp; Greed</span><span class="v">${fg.score} · ${fg.label}</span></div>
@@ -889,7 +930,7 @@ routes.report = async (app) => {
       <div class="card" style="margin-bottom:16px"><div class="card-title">⭐ หุ้นน่าสนใจวันนี้</div>
         ${(r.top_buys||[]).length ? r.top_buys.map(s=>repCard(s)).join('') : emptyState('🔍','ไม่มีหุ้นเข้าเกณฑ์วันนี้')}</div>
       ${(r.watch_avoid||[]).length ? `<div class="card"><div class="card-title">⚠️ ระวัง / คะแนนต่ำ</div>
-        ${r.watch_avoid.map(s=>`<div class="stat-row ticker-card" data-t="${s.ticker}" style="cursor:pointer"><span><b class="mono">${s.ticker}</b> ${s.name||''}</span><span class="pill sell">${s.total_score}</span></div>`).join('')}</div>` : ''}`;
+        ${r.watch_avoid.map(s=>`<div class="stat-row ticker-card" data-t="${s.ticker}" style="cursor:pointer"><span><b class="mono">${s.ticker}</b> ${s.name||''}</span><span class="pill sell">${s.total_score}</span></div>`).join('')}</div>` : ''}`);
     $$('#repBody [data-t]').forEach(x=>x.onclick=()=>go('analyze',x.dataset.t));
   }
   function repCard(s) {
