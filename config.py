@@ -62,6 +62,12 @@ class Config:
         "TLT",  # พันธบัตรสหรัฐระยะยาว
     ]
 
+    # --- สะพานเชื่อมระบบเทรด MT5 ที่บ้าน (volume-edge) ---
+    # ตั้ง 2 ค่านี้แล้วเมนู "พอร์ต MT5" จะดึงไม้จริง/สัญญาณ/สถิติมาแสดง
+    # ไม่ตั้ง = ปิดฟีเจอร์เงียบ ๆ · ดึงเฉพาะคำสั่งอ่าน สั่งซื้อขายข้ามระบบไม่ได้
+    VE_BASE_URL = os.environ.get("VE_BASE_URL", "").strip()
+    VE_AUTH_KEY = os.environ.get("VE_AUTH_KEY", "").strip()
+
     # --- GDELT (ข่าวทั่วโลก 65 ภาษา · ฟรี ไม่ต้องใช้ API key) ---
     GDELT_BASE = os.environ.get("GDELT_BASE", "https://api.gdeltproject.org/api/v2")
     GDELT_TIMEOUT = int(os.environ.get("GDELT_TIMEOUT", "35"))

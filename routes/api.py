@@ -12,7 +12,7 @@ from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
     alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
-    selfcheck, volume_profile, strategy_lab,
+    selfcheck, volume_profile, strategy_lab, volume_edge,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -408,6 +408,51 @@ def lab_league_ep():
         tickers=tickers,
         days=int(a.get("days") or strategy_lab.DEFAULT_DAYS),
         include=a.get("include")))
+
+
+# ---------------- 21) สะพานเชื่อมระบบเทรด MT5 ที่บ้าน (volume-edge) ----------------
+@api.get("/ve/overview")
+def ve_overview_ep():
+    """ทุกอย่างของหน้าพอร์ต MT5 ในคำขอเดียว (สถานะ + ไม้เปิด + สัญญาณ + สถิติ)"""
+    return jsonify(volume_edge.overview())
+
+
+@api.get("/ve/status")
+def ve_status_ep():
+    return jsonify(volume_edge.status())
+
+
+@api.get("/ve/positions")
+def ve_positions_ep():
+    """ไม้จริงใน MT5 + เหตุผลตอนเข้า + มุมมองข่าวโลกของ NEBULA ต่อไม้นั้น"""
+    return jsonify(volume_edge.positions())
+
+
+@api.get("/ve/trades")
+def ve_trades_ep():
+    return jsonify(volume_edge.trades(
+        limit=int(request.args.get("limit", 50)),
+        status_filter=request.args.get("status", "all")))
+
+
+@api.get("/ve/signals")
+def ve_signals_ep():
+    return jsonify(volume_edge.signals(int(request.args.get("limit", 40))))
+
+
+@api.get("/ve/stats")
+def ve_stats_ep():
+    return jsonify(volume_edge.setup_stats())
+
+
+@api.get("/ve/equity")
+def ve_equity_ep():
+    return jsonify(volume_edge.equity(int(request.args.get("limit", 400))))
+
+
+@api.get("/ve/screener")
+def ve_screener_ep():
+    return jsonify(volume_edge.screener_latest())
 
 
 # ---------------- 18) ตรวจระบบ ----------------
