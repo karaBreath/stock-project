@@ -19,6 +19,11 @@ class Config:
     HOST = "0.0.0.0"
     PORT = int(os.environ.get("PORT", "5000"))
 
+    # กุญแจสำหรับตอนเปิดเว็บออกอินเทอร์เน็ต (Cloudflare Tunnel)
+    # ว่าง = ไม่ล็อก (ใช้ในเครื่องตัวเอง) · ตั้งค่า = คนนอกต้องมีกุญแจถึงจะเข้าได้
+    # share.bat จะสุ่มกุญแจให้เองแล้วเขียนลง .env
+    SHARE_TOKEN = os.environ.get("SHARE_TOKEN", "").strip()
+
     # --- Database ---
     DB_PATH = os.environ.get("DB_PATH", str(BASE_DIR / "data" / "stock_app.db"))
 

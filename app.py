@@ -69,6 +69,15 @@ def create_app():
     init_db()
     app.register_blueprint(api)
 
+    # ล็อกกุญแจเมื่อเปิดเว็บออกอินเทอร์เน็ต (เช่นผ่าน Cloudflare Tunnel)
+    # ไม่ตั้ง SHARE_TOKEN = ไม่ล็อก ใช้ในเครื่องตัวเองเหมือนเดิมทุกอย่าง
+    if Config.SHARE_TOKEN:
+        from services import access_guard
+
+        @app.before_request
+        def _guard():
+            return access_guard.check(Config.SHARE_TOKEN)
+
     # กัน Flask debug reloader สร้างเธรดซ้ำ (โหมด debug จะบูต 2 รอบ)
     if not Config.DEBUG or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         _start_collector()
