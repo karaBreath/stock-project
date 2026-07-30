@@ -157,3 +157,17 @@ def create_shortcut() -> dict:
         "note": ("สร้างไอคอนบนหน้าจอแล้ว — ดับเบิลคลิกเปิดได้เลย"
                  + ("" if quiet else " (จะมีหน้าต่างดำขึ้นมาด้วย)")),
     }
+
+
+if __name__ == "__main__":
+    # เรียกจาก setup.ps1 ได้ตรง ๆ
+    #
+    # ⚠️ พิมพ์เป็นอังกฤษล้วนตรงนี้ — คอนโซล Windows ใช้ code page 874/437
+    # ถ้าพิมพ์ไทยออกไปจะได้ UnicodeEncodeError แล้วดูเหมือนโปรแกรมพัง
+    # ทั้งที่ไอคอนสร้างสำเร็จแล้ว ข้อความไทยอยู่ในหน้าต่างโปรแกรมแทน
+    _r = create_shortcut()
+    if _r["ok"]:
+        print("  Desktop icon created.")
+    else:
+        print("  Could not create the desktop icon: "
+              + _r["error"].encode("ascii", "replace").decode("ascii"))

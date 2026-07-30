@@ -1,0 +1,142 @@
+# ตรวจของที่ทำงานเฉพาะบน Windows — บนเครื่อง Linux ทดสอบไม่ได้เลย
+#
+# สามอย่างที่พังแล้วผู้ใช้จะเจอ "หาไม่เจอ เปิดไม่ได้" พอดี:
+#   1) setup.ps1 syntax ผิด -> วางบรรทัดเดียวแล้วเด้ง error ทันที
+#   2) สร้างไอคอนบนหน้าจอไม่สำเร็จ -> ไม่มีอะไรให้ดับเบิลคลิก
+#   3) หน้าต่าง tkinter เปิดไม่ขึ้น -> กดไอคอนแล้วเงียบ
+#
+# วัดบน windows-latest ของจริง ไม่ใช่เดา
+name: windows-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "setup.ps1"
+      - "gui.py"
+      - "gui.bat"
+      - "services/desktop.py"
+      - ".github/workflows/windows-check.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -------------------------------------------------------------------
+      - name: "1) setup.ps1 ต้อง parse ผ่าน (ไม่งั้นวางบรรทัดเดียวแล้วพังทันที)"
+        shell: powershell
+        run: |
+          $errors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\setup.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
+            throw "setup.ps1 มี syntax error $($errors.Count) จุด"
+          }
+          Write-Host "  setup.ps1 parse ผ่าน · $($tokens.Count) tokens"
+
+      - name: "2) gui.bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
+        shell: powershell
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("$PWD\gui.bat")
+          if ($bytes | Where-Object { $_ -gt 127 }) { throw "gui.bat มีอักขระที่ไม่ใช่ ASCII" }
+          $text = [IO.File]::ReadAllText("$PWD\gui.bat")
+          $crlf = ([regex]::Matches($text, "`r`n")).Count
+          $lf   = ([regex]::Matches($text, "`n")).Count
+          if ($crlf -ne $lf) { throw "gui.bat มีบรรทัดที่ไม่ได้จบด้วย CRLF" }
+          Write-Host "  gui.bat ผ่าน · $crlf บรรทัด CRLF"
+
+      # -------------------------------------------------------------------
+      - name: "3) สร้างไอคอนบนหน้าจอจริง แล้วต้องมีไฟล์ .lnk โผล่จริง"
+        shell: powershell
+        run: |
+          python services\desktop.py
+          $desk = [Environment]::GetFolderPath('Desktop')
+          Write-Host "  หน้าจออยู่ที่: $desk"
+          $lnk = Get-ChildItem $desk -Filter *.lnk -ErrorAction SilentlyContinue
+          $lnk | ForEach-Object { Write-Host "  เจอ: $($_.Name) ($($_.Length) bytes)" }
+          if (-not $lnk) { throw "ไม่มีไฟล์ .lnk บนหน้าจอ = ผู้ใช้จะไม่มีอะไรให้กด" }
+
+          # ทางลัดต้องชี้ไปที่ gui.py จริง ๆ ไม่ใช่สร้างไฟล์เปล่า ๆ ไว้หลอกตา
+          $sh = New-Object -ComObject WScript.Shell
+          $s = $sh.CreateShortcut($lnk[0].FullName)
+          Write-Host "  TargetPath  : $($s.TargetPath)"
+          Write-Host "  Arguments   : $($s.Arguments)"
+          Write-Host "  IconLocation: $($s.IconLocation)"
+          if ($s.Arguments -notlike "*gui.py*") { throw "ทางลัดไม่ได้ชี้ไปที่ gui.py" }
+          if (-not (Test-Path $s.TargetPath))   { throw "ตัวรันที่ทางลัดชี้ไปไม่มีอยู่จริง" }
+          $icon = ($s.IconLocation -split ',')[0]
+          if (-not (Test-Path $icon)) { throw "ไฟล์ไอคอนไม่มีอยู่จริง" }
+          Write-Host "  ทางลัดถูกต้องครบทุกช่อง"
+
+      # -------------------------------------------------------------------
+      - name: "4) หน้าต่างโปรแกรมต้องเปิดขึ้นจริงบน Windows"
+        shell: bash          # ต้องใช้ bash — powershell ไม่รองรับ heredoc
+        env:
+          # Python 3.11 บน Windows ใช้ cp1252 เป็นค่าตั้งต้น
+          # ถ้าไม่บังคับ UTF-8 การ print ข้อความไทยจะโยน UnicodeEncodeError
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          pip install -q -r requirements.txt
+          pip install -q pillow
+          python -u - <<'PY'
+          import sys, time, pathlib
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          import tkinter as tk
+          import gui
+
+          root = tk.Tk()
+          app = gui.App(root)
+          root.update()          # วาดของจริง ถ้าพังจะโยนตรงนี้
+
+          w, h = root.winfo_width(), root.winfo_height()
+          print(f"  หน้าต่างเปิดได้ · ขนาด {w}x{h} · ชื่อ {root.title()!r}")
+          assert w > 300 and h > 200, "หน้าต่างเล็กผิดปกติ"
+
+          def walk(node, out):
+              for c in node.winfo_children():
+                  if c.winfo_class() == "Button":
+                      out.append(c.cget("text"))
+                  walk(c, out)
+              return out
+
+          labels = walk(root, [])
+          print(f"  ปุ่มทั้งหมด {len(labels)} ปุ่ม:")
+          for t in labels:
+              print(f"    - {t}")
+          assert len(labels) >= 9, f"ปุ่มหายไป เหลือแค่ {len(labels)}"
+
+          time.sleep(1)
+          root.update()
+          try:
+              from PIL import ImageGrab
+              x, y = root.winfo_rootx(), root.winfo_rooty()
+              img = ImageGrab.grab((x, y, x + w, y + h))
+              img.save("gui-shot.png")
+              colors = img.convert("RGB").getcolors(maxcolors=1_000_000) or []
+              print(f"  ถ่ายภาพหน้าจอได้ · {img.size} · {len(colors)} สี")
+              if len(colors) < 5:
+                  print("  !! ภาพเกือบว่างเปล่า — runner ไม่มี session จริง")
+          except Exception as e:
+              print(f"  ถ่ายภาพไม่ได้ (ไม่ใช่ข้อผิดพลาดร้ายแรง): {e}")
+
+          root.destroy()
+          print("  ผ่านทั้งหมด")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-screenshot
+          path: gui-shot.png
+          if-no-files-found: ignore
