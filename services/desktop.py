@@ -133,6 +133,43 @@ def desktop_dir() -> Path:
     return Path(os.path.expanduser("~")) / "Desktop"
 
 
+STAGING_NAME = "nebula-shortcut.lnk"   # ASCII ล้วนโดยตั้งใจ · ดู create_shortcut
+
+
+def ansi_safe(text: str) -> bool:
+    """
+    เขียนเป็น code page ของระบบได้ไหม
+
+    WScript.Shell เป็นของเก่าที่แปลงพาธเป็น ANSI ก่อนบันทึกเสมอ
+    ถ้าพาธมีตัวอักษรที่ code page ของระบบไม่มี มันจะบันทึกไม่สำเร็จ
+    (บนเครื่องที่ไม่ได้ตั้งภาษาไทย ชื่อไทยจะกลายเป็น ??? แล้ว Windows ปฏิเสธ)
+    """
+    try:
+        text.encode("mbcs")
+        return True
+    except UnicodeEncodeError:
+        return False
+    except LookupError:
+        return True        # ไม่ใช่ Windows — ไม่ต้องกังวลเรื่องนี้
+
+
+def short_path(p: Path) -> Path:
+    """
+    ขอชื่อพาธแบบสั้น (8.3) จาก Windows ซึ่งเป็น ASCII เสมอ
+
+    ใช้ตอนที่ชื่อผู้ใช้เป็นภาษาไทย ทำให้แม้แต่โฟลเดอร์ปลายทางก็เขียนเป็น
+    ANSI ไม่ได้ ถ้าระบบปิดการสร้างชื่อสั้นไว้ จะได้พาธเดิมกลับมา
+    """
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(str(p), buf, 1024):
+            return Path(buf.value)
+    except Exception:
+        pass
+    return p
+
+
 def _ps_quote(s) -> str:
     """ใส่ค่าเป็นสตริงของ PowerShell อย่างปลอดภัย (ครอบ single quote)"""
     return "'" + str(s).replace("'", "''") + "'"
@@ -207,20 +244,40 @@ def create_shortcut() -> dict:
         return {"ok": False, "error": f"สร้างไฟล์ไอคอนไม่ได้: {e}"}
 
     target, quiet = python_target()
-    link = desktop_dir() / f"{APP_NAME}.lnk"
+    desk = desktop_dir()
+    link = desk / f"{APP_NAME}.lnk"
+
+    # ⚠️ ห้ามให้ PowerShell บันทึกไฟล์ชื่อภาษาไทยโดยตรง
+    #
+    # WScript.Shell แปลงพาธเป็น ANSI ก่อนบันทึก บนเครื่องที่ระบบไม่ใช่ภาษาไทย
+    # ชื่อจะกลายเป็น "???????????.lnk" แล้ว Windows ปฏิเสธ
+    # ขึ้นว่า "Unable to save shortcut" — วัดมาแล้วบน windows-latest จริง
+    #
+    # จึงให้มันบันทึกด้วยชื่ออังกฤษก่อน แล้วค่อยให้ Python เปลี่ยนชื่อเป็นไทย
+    # เพราะ Python เปลี่ยนชื่อไฟล์ผ่าน API แบบ Unicode ไม่ติดข้อจำกัดนี้
+    # (ชื่อไฟล์ไม่ได้ถูกเก็บอยู่ข้างในไฟล์ .lnk การเปลี่ยนชื่อจึงปลอดภัย)
+    build_dir = desk if ansi_safe(str(desk)) else short_path(desk)
+    staging = build_dir / STAGING_NAME
     try:
         code, out, err = ps_run(
-            shortcut_script(link, target, f'"{BASE / "gui.py"}"', BASE, icon))
+            shortcut_script(staging, target, f'"{BASE / "gui.py"}"',
+                            BASE, icon))
     except Exception as e:
         return {"ok": False, "error": f"เรียก PowerShell ไม่สำเร็จ: {e}"}
 
-    if code != 0 or not link.exists():
+    if code != 0 or not staging.exists():
         detail = " / ".join(p for p in ((err or "").strip(),
                                         (out or "").strip()) if p)
         return {"ok": False,
                 "error": (detail[-400:] if detail
                           else f"สร้างไฟล์ทางลัดไม่สำเร็จ (exit {code}, "
-                               f"ไม่พบไฟล์ที่ {link})")}
+                               f"ไม่พบไฟล์ที่ {staging})")}
+
+    try:
+        staging.replace(link)
+    except OSError as e:
+        return {"ok": False,
+                "error": f"เปลี่ยนชื่อไอคอนเป็นภาษาไทยไม่สำเร็จ: {e}"}
     return {
         "ok": True,
         "path": str(link),

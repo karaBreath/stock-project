@@ -8,6 +8,7 @@
   3. ชื่อไฟล์/พาธมีเครื่องหมายพิเศษแล้วคำสั่ง PowerShell พัง
 """
 import os
+import re
 import struct
 import sys
 
@@ -234,6 +235,39 @@ def test_quotes_are_escaped_so_odd_paths_do_not_break_powershell():
 
 
 def test_shortcut_is_named_in_thai_as_requested(tmp_path, monkeypatch):
+    """
+    PowerShell บันทึกด้วยชื่ออังกฤษก่อน แล้ว Python เปลี่ยนชื่อเป็นไทย
+    ผลสุดท้ายที่ผู้ใช้เห็นบนหน้าจอต้องเป็นภาษาไทยเท่านั้น
+    """
+    monkeypatch.setattr(D, "IS_WIN", True)
+    monkeypatch.setattr(D, "desktop_dir", lambda: tmp_path)
+    monkeypatch.setattr(D, "ensure_icon", lambda: tmp_path / "app.ico")
+
+    class R:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(cmd, **kw):
+        (tmp_path / D.STAGING_NAME).write_text("x")   # ทำเหมือน PowerShell จริง
+        return R()
+
+    monkeypatch.setattr(D.subprocess, "run", fake_run)
+    res = D.create_shortcut()
+    assert res["ok"] and res["name"] == "เทรดข่าวโลก"
+    assert res["path"].endswith("เทรดข่าวโลก.lnk")
+    assert (tmp_path / "เทรดข่าวโลก.lnk").exists()
+    assert not (tmp_path / D.STAGING_NAME).exists(), "ต้องไม่เหลือไฟล์ชั่วคราวค้าง"
+
+
+def test_never_asks_powershell_to_write_a_thai_filename(tmp_path, monkeypatch):
+    """
+    บั๊กจริงจาก windows-latest:
+      FAILED: Unable to save shortcut "C:\\Users\\...\\???????????.lnk"
+
+    WScript.Shell แปลงพาธเป็น ANSI ก่อนบันทึก เครื่องที่ระบบไม่ใช่ภาษาไทย
+    จึงบันทึกไม่ได้เลย ชื่อที่ส่งให้ PowerShell ต้องเป็น ASCII เสมอ
+    """
     monkeypatch.setattr(D, "IS_WIN", True)
     monkeypatch.setattr(D, "desktop_dir", lambda: tmp_path)
     monkeypatch.setattr(D, "ensure_icon", lambda: tmp_path / "app.ico")
@@ -241,17 +275,49 @@ def test_shortcut_is_named_in_thai_as_requested(tmp_path, monkeypatch):
 
     class R:
         returncode = 0
-        stdout = ""
-        stderr = ""
+        stdout = b""
+        stderr = b""
 
     def fake_run(cmd, **kw):
-        seen["cmd"] = cmd
-        (tmp_path / f"{D.APP_NAME}.lnk").write_text("x")
+        seen["script"] = open(cmd[cmd.index("-File") + 1], "rb").read()
+        (tmp_path / D.STAGING_NAME).write_text("x")
         return R()
 
     monkeypatch.setattr(D.subprocess, "run", fake_run)
+    D.create_shortcut()
+
+    script = seen["script"].decode("utf-8-sig")
+    saved_path = re.search(r"CreateShortcut\('([^']+)'\)", script).group(1)
+    assert saved_path.isascii(), f"พาธที่ส่งให้ PowerShell ต้องเป็น ASCII: {saved_path}"
+    assert saved_path.endswith(D.STAGING_NAME)
+
+
+def test_uses_the_short_ascii_path_when_the_username_is_thai(monkeypatch, tmp_path):
+    """
+    ถ้าชื่อผู้ใช้เป็นภาษาไทย แม้แต่โฟลเดอร์ปลายทางก็เขียนเป็น ANSI ไม่ได้
+    ต้องขอชื่อพาธแบบสั้น (8.3) จาก Windows ซึ่งเป็น ASCII เสมอ
+    """
+    thai_desk = tmp_path / "ผู้ใช้" / "Desktop"
+    thai_desk.mkdir(parents=True)
+    short = tmp_path / "SHORT"
+    short.mkdir()
+
+    monkeypatch.setattr(D, "IS_WIN", True)
+    monkeypatch.setattr(D, "desktop_dir", lambda: thai_desk)
+    monkeypatch.setattr(D, "ensure_icon", lambda: tmp_path / "app.ico")
+    monkeypatch.setattr(D, "ansi_safe", lambda s: s.isascii())
+    monkeypatch.setattr(D, "short_path", lambda p: short)
+
+    class R:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    monkeypatch.setattr(D.subprocess, "run",
+                        lambda *a, **k: ((short / D.STAGING_NAME).write_text("x"),
+                                         R())[1])
     res = D.create_shortcut()
-    assert res["ok"] and res["name"] == "เทรดข่าวโลก"
+    assert res["ok"], res.get("error")
     assert res["path"].endswith("เทรดข่าวโลก.lnk")
 
 

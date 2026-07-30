@@ -82,6 +82,9 @@ jobs:
           Write-Host "  TargetPath  : $($s.TargetPath)"
           Write-Host "  Arguments   : $($s.Arguments)"
           Write-Host "  IconLocation: $($s.IconLocation)"
+          Write-Host "  Description : $($s.Description)"
+          $bytes = [Text.Encoding]::UTF8.GetBytes($lnk[0].Name)
+          Write-Host "  Name bytes  : $($bytes -join ' ')"
           if ($s.Arguments -notlike "*gui.py*") { throw "Shortcut does not point at gui.py" }
           if (-not (Test-Path $s.TargetPath))   { throw "Shortcut target does not exist" }
           $icon = ($s.IconLocation -split ',')[0]
