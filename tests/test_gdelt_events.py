@@ -147,8 +147,9 @@ def test_short_row_is_ignored(monkeypatch):
 @pytest.mark.parametrize("root,url,expect", [
     ("19", "https://x.com/news/border-clash", "conflict"),      # CAMEO สู้รบ
     ("20", "https://x.com/news/attack", "conflict"),
-    ("05", "https://x.com/news/summit-talks", "trade"),         # การทูต
-    ("01", "https://x.com/news/statement", "market"),
+    ("05", "https://x.com/news/summit-talks", "geopolitics"),   # การทูต
+    ("01", "https://x.com/news/statement", "geopolitics"),
+    ("11", "https://x.com/news/condemns-move", "geopolitics"),  # ไม่ใช่ "การค้า"
     # ลิงก์ชนะรหัส CAMEO เพราะบอกเรื่องได้ตรงกว่า
     ("01", "https://x.com/2026/oil-prices-surge-opec", "energy"),
     ("19", "https://x.com/2026/earthquake-hits-coast", "disaster"),
