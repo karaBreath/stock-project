@@ -1,5 +1,5 @@
-# หาเงื่อนไขที่ GDELT ArtList ยอมรับจริง — ตัวแปรที่สงสัย: maxrecords และความกว้างของ query
-# วัดก่อนแก้ ไม่เดา
+# พิสูจน์ว่าลูกโลกใช้งานได้จริง — รันโค้ดจริงยิง GDELT จริง
+# จำลองการเปิดหน้า 6 ครั้ง (แต่ละครั้งยิง 1 คำ) แล้วดูว่าคลังโตขึ้นและมีจุดวาดจริงไหม
 name: globe-live
 
 on:
@@ -12,51 +12,57 @@ on:
   workflow_dispatch:
 
 jobs:
-  measure:
+  prove:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: วัดว่า ArtList รับ maxrecords / query แบบไหนได้
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -q requests python-dotenv flask
+      - name: จำลองเปิดหน้าลูกโลก 6 ครั้ง แล้ววัดผลจริง
+        env:
+          LEARN_AUTO: "0"
+          DB_PATH: /tmp/globe_live.db
         run: |
-          UA="NEBULA-Stock-App/1.0 (educational stock research)"
-          B="https://api.gdeltproject.org/api/v2/doc/doc"
-          probe () {
-            printf '%-46s' "$1"
-            out=$(curl -sS -m 45 -A "$UA" -w '|HTTP=%{http_code}|T=%{time_total}s|SZ=%{size_download}' "$2" 2>&1)
-            code=$(echo "$out" | grep -o 'HTTP=[0-9]*' | tail -1)
-            tim=$(echo "$out" | grep -o 'T=[0-9.]*s' | tail -1)
-            sz=$(echo "$out" | grep -o 'SZ=[0-9]*' | tail -1)
-            n=$(echo "$out" | grep -o '"url"' | wc -l)
-            echo " $code $tim $sz | ข่าวที่ได้=$n"
-            sleep 10
-          }
-          echo "===== A) คำเดียว เปลี่ยน maxrecords ====="
-          probe "inflation maxrecords=5"    "$B?query=inflation&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          probe "inflation maxrecords=50"   "$B?query=inflation&mode=ArtList&format=json&maxrecords=50&timespan=24h"
-          probe "inflation maxrecords=100"  "$B?query=inflation&mode=ArtList&format=json&maxrecords=100&timespan=24h"
-          probe "inflation maxrecords=250"  "$B?query=inflation&mode=ArtList&format=json&maxrecords=250&timespan=24h"
+          python - <<'PY'
+          import time
+          from database import init_db
+          init_db()
+          from services import gdelt
 
-          echo
-          echo "===== B) หลายคำ OR เปลี่ยน maxrecords ====="
-          Q3="%28inflation%20OR%20tariff%20OR%20semiconductor%29"
-          probe "3 คำ OR maxrecords=5"      "$B?query=$Q3&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          probe "3 คำ OR maxrecords=50"     "$B?query=$Q3&mode=ArtList&format=json&maxrecords=50&timespan=24h"
-          probe "3 คำ OR maxrecords=250"    "$B?query=$Q3&mode=ArtList&format=json&maxrecords=250&timespan=24h"
+          rounds_with_points = 0
+          for i in range(1, 7):
+              t0 = time.time()
+              res = gdelt.all_theme_points("24h")
+              el = round(time.time() - t0, 1)
+              pts = res.get("points") or []
+              filled = [t for t in res.get("themes", []) if t.get("count")]
+              print(f"เปิดหน้าครั้งที่ {i}: {el}s | จุดบนลูกโลก={len(pts)} "
+                    f"| ธีมที่มีข้อมูล={len(filled)}/9 | ข่าวในคลัง={res.get('pool_size')}")
+              if res.get("error"):
+                  print(f"    error: {res['error']}")
+              if res.get("note"):
+                  print(f"    note: {res['note']}")
+              if pts:
+                  rounds_with_points += 1
+                  top = sorted(pts, key=lambda p: -p["count"])[:4]
+                  print("    " + " | ".join(
+                      f"{p['name']}/{p['theme']}={p['count']}" for p in top))
+              time.sleep(12)
 
-          echo
-          echo "===== C) query รวม 9 ธีมของเรา ====="
-          Q9="%28%22stock%20market%22%20OR%20inflation%20OR%20tariff%20OR%20semiconductor%20OR%20%22oil%20price%22%20OR%20war%20OR%20earthquake%20OR%20earnings%20OR%20Thailand%29"
-          probe "9 ธีม maxrecords=5"        "$B?query=$Q9&mode=ArtList&format=json&maxrecords=5&timespan=24h"
-          probe "9 ธีม maxrecords=50"       "$B?query=$Q9&mode=ArtList&format=json&maxrecords=50&timespan=24h"
-          probe "9 ธีม maxrecords=250"      "$B?query=$Q9&mode=ArtList&format=json&maxrecords=250&timespan=24h"
+          print()
+          print("===== รายละเอียดธีมหลังเปิด 6 ครั้ง =====")
+          final = gdelt.world_snapshot("24h", refill=False)
+          for t in final.get("themes", []):
+              print(f"  {t['key']:<10} จุด={t['count']:<3} ข่าว={t['articles']}")
+          print(f"  ข่าวในคลังทั้งหมด: {final.get('pool_size')} "
+                f"| แยกธีมไม่ได้: {final.get('unclassified')}")
 
-          echo
-          echo "===== D) ไม่ระบุ maxrecords / ไม่ระบุ sort ====="
-          probe "inflation ไม่ระบุ maxrecords" "$B?query=inflation&mode=ArtList&format=json&timespan=24h"
-          probe "inflation + sort=DateDesc"    "$B?query=inflation&mode=ArtList&format=json&maxrecords=50&timespan=24h&sort=DateDesc"
-
-          echo
-          echo "===== E) ยิงคำเดียว maxrecords=50 ซ้ำ 4 ครั้งห่าง 10 วิ (วัดความเสถียร) ====="
-          for w in economy market trade energy; do
-            probe "ซ้ำ: $w maxrecords=50" "$B?query=$w&mode=ArtList&format=json&maxrecords=50&timespan=24h"
-          done
+          print()
+          print(f"===== สรุป: ครั้งที่ลูกโลกมีจุดวาด {rounds_with_points}/6 =====")
+          ok = rounds_with_points >= 5 and len(final.get("points") or []) >= 10
+          print("PASS - ลูกโลกใช้งานได้จริง" if ok else "FAIL - ยังไม่ผ่านเกณฑ์")
+          PY

@@ -152,53 +152,112 @@ def _day_of(stamp: str) -> str:
 # ---------------------------------------------------------------------------
 # 1) จุดข่าวบนแผนที่ (สำหรับลูกโลก 3D)
 # ---------------------------------------------------------------------------
-def world_snapshot(timespan: str = "24h") -> dict:
+POOL_KEY = "gdelt:pool"
+
+
+def _pool_load() -> dict:
+    d = cache_get(POOL_KEY) or {}
+    return {"articles": d.get("articles") or [], "cursor": int(d.get("cursor") or 0),
+            "updated": d.get("updated"), "last_ok": d.get("last_ok")}
+
+
+def _pool_save(pool: dict):
+    cache_set(POOL_KEY, pool, 60 * 60 * 24 * 7)
+
+
+def _pool_prune(articles):
+    """ตัดข่าวเก่าเกินอายุ + ตัดข่าวซ้ำ (ยึด url) + จำกัดจำนวน"""
+    cutoff = time.time() - Config.WORLD_POOL_HOURS * 3600
+    seen, out = set(), []
+    for a in sorted(articles, key=lambda x: x.get("_t", 0), reverse=True):
+        url = a.get("url")
+        if not url or url in seen or (a.get("_t", 0) < cutoff):
+            continue
+        seen.add(url)
+        out.append(a)
+        if len(out) >= Config.WORLD_POOL_MAX:
+            break
+    return out
+
+
+def _fetch_one_word(word: str):
     """
-    ดึงข่าวโลก **ครั้งเดียว** แล้วแยกธีมเองในเครื่อง → จุดสำหรับปักบนลูกโลก
-
-    ทำไมต้องยิงครั้งเดียว (นี่คือหัวใจที่ทำให้ลูกโลกใช้งานได้จริง)
-    ------------------------------------------------------------
-    เดิมยิงธีมละครั้ง = 9 คำขอต่อการเปิดหน้าเดียว แต่ GDELT จำกัดอัตราแรงมาก
-    (วัดจริง: ยิงห่างกัน 8-25 วินาที ยังโดนปฏิเสธราวครึ่ง) โอกาสสำเร็จครบ 9 ครั้ง
-    ติดกันจึงแทบเป็นศูนย์ → ลูกโลกว่างเปล่าเป็นปกติ
-
-    ตอนนี้ยิงคำค้นกว้าง ๆ ครั้งเดียว ได้ข่าวสูงสุด 250 ชิ้น แล้วอ่านพาดหัวเพื่อ
-    จัดเข้าธีมเอง (Config.WORLD_THEME_KEYWORDS) → โอกาสสำเร็จเท่ากับคำขอเดียว
-    และเร็วขึ้นราว 9 เท่า
-
-    ⚠️ GDELT ปิด GEO 2.0 API แล้ว (api/v2/geo/geo -> HTTP 404 ทุกแบบ ยืนยัน 6 ครั้ง)
-    จึงใช้ประเทศต้นทางข่าว (sourcecountry) วางจุดที่พิกัดกลางของประเทศนั้น
-    ผลหยาบระดับประเทศ ไม่ใช่ระดับเมืองเหมือนเดิม แต่ยังตอบโจทย์ "เรื่องไหนร้อนที่ไหน"
+    ยิง GDELT 1 ครั้งด้วย "คำเดียว" + maxrecords=50 — รูปแบบเดียวที่วัดแล้วผ่านจริง
+    (คำค้นที่มี OR หลายคำโดนปฏิเสธ 100% · maxrecords อื่นก็โดนปฏิเสธ)
     """
-    span = _clamp_timespan(timespan)
-    ck = f"gdelt:snap:{span}"
-    cached = cache_get(ck)
-    if cached:
-        return cached
-
     data = _fetch_json("doc/doc", {
-        "query": Config.WORLD_COMBINED_QUERY,
+        "query": word,
         "mode": "ArtList",
         "format": "json",
-        "maxrecords": 250,
-        "timespan": span,
+        "maxrecords": Config.WORLD_MAXRECORDS,
+        "timespan": "24h",
         "sort": "DateDesc",
-    }, retries=1)
+    }, retries=0)
+    return (data or {}).get("articles") or []
 
-    arts = (data or {}).get("articles") or []
+
+def refill_pool(rounds: int = 1) -> dict:
+    """
+    เติมคลังข่าวทีละคำ วนไปเรื่อย ๆ (คำที่ล้มจะได้คิวใหม่รอบหน้าเอง)
+    เรียกจากหน้าเว็บ (rounds=1 เพื่อไม่ให้ช้า) และจากตัวเก็บเบื้องหลัง (rounds มากกว่า)
+    """
+    pool = _pool_load()
+    words = list(Config.WORLD_FETCH_WORDS)
+    if not words:
+        return {"added": 0, "tried": 0, "ok": 0}
+
+    added = ok = 0
+    for i in range(max(1, rounds)):
+        word = words[(pool["cursor"] + i) % len(words)]
+        arts = _fetch_one_word(word)
+        if arts:
+            ok += 1
+            now = time.time()
+            for a in arts:
+                a["_t"] = now
+                a["_w"] = word
+            pool["articles"] = _pool_prune(pool["articles"] + arts)
+            added += len(arts)
+            pool["last_ok"] = dt.datetime.now().isoformat(timespec="minutes")
+
+    pool["cursor"] = (pool["cursor"] + max(1, rounds)) % len(words)
+    pool["updated"] = dt.datetime.now().isoformat(timespec="minutes")
+    _pool_save(pool)
+    return {"added": added, "tried": max(1, rounds), "ok": ok,
+            "pool_size": len(pool["articles"])}
+
+
+def world_snapshot(timespan: str = "24h", refill: bool = True) -> dict:
+    """
+    จุดข่าวบนลูกโลก — สร้างจาก "คลังข่าวสะสม" ไม่ใช่การยิงสด 9 ครั้ง
+
+    ทำไมต้องเป็นแบบนี้ (วัดจาก GDELT จริง ไม่ได้เดา)
+    ------------------------------------------------
+    ArtList ของ GDELT ยอมรับเฉพาะ "คำเดียว + maxrecords=50" (ผ่าน 4/5 ครั้ง)
+    ส่วนคำค้นที่มี OR หลายคำโดนปฏิเสธ 0/6 ครั้ง และ maxrecords ค่าอื่นก็โดนปฏิเสธ
+    → จะยิงรวมทุกธีมในครั้งเดียวไม่ได้ และยิงธีมละครั้ง (9 ครั้ง) ก็ไม่รอด
+
+    วิธีที่ใช้: เปิดหน้าแต่ละครั้งยิงแค่ "1 คำ" (วนคำไปเรื่อย ๆ) แล้วสะสมข่าวไว้
+    ในคลังร่วมอายุ 36 ชม. → ลูกโลกวาดจากคลัง ไม่ต้องรอผลสด
+    ยิ่งเปิดบ่อย/ตัวเก็บเบื้องหลังทำงาน คลังยิ่งเต็ม ครอบคลุมธีมมากขึ้นเรื่อย ๆ
+    ถ้าคำที่ยิงรอบนี้ล้ม ลูกโลกก็ยังวาดจากคลังเดิมได้ตามปกติ
+
+    ⚠️ GDELT ปิด GEO 2.0 API แล้ว (api/v2/geo/geo -> 404 ทุกแบบ) จึงใช้ประเทศ
+    ต้นทางข่าว (sourcecountry) วางจุดที่พิกัดกลางของประเทศ = หยาบระดับประเทศ
+    """
+    fetch = None
+    if refill:
+        fetch = refill_pool(rounds=1)
+
+    pool = _pool_load()
+    arts = pool["articles"]
     if not arts:
-        stale = cache_get(ck + ":last")
-        if stale and stale.get("points"):
-            stale = dict(stale)
-            stale["stale"] = True
-            stale["note"] = ("ดึงสดไม่ได้ตอนนี้ — แสดงข้อมูลที่เก็บไว้เมื่อ "
-                             f"{stale.get('fetched_at', 'ก่อนหน้านี้')}")
-            return stale
-        return {"ok": False, "points": [], "themes": [], "timespan": span,
-                "articles_seen": 0,
+        return {"ok": False, "points": [], "themes": _empty_themes(),
+                "timespan": timespan, "articles_seen": 0, "pool_size": 0,
+                "fetch": fetch,
                 "error": (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
                           if in_cooldown() else
-                          "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)")}
+                          "ยังไม่มีข่าวในคลัง — GDELT ปฏิเสธคำขอรอบนี้ ลองใหม่อีกครั้งได้")}
 
     by_theme = _classify_articles(arts)
     points, themes = [], []
@@ -211,20 +270,23 @@ def world_snapshot(timespan: str = "24h") -> dict:
                        "count": len(pts), "articles": len(by_theme.get(key, [])),
                        "ok": bool(pts)})
 
-    out = {
+    return {
         "ok": bool(points),
         "points": points,
         "themes": themes,
-        "timespan": span,
+        "timespan": timespan,
         "articles_seen": len(arts),
+        "pool_size": len(arts),
         "unclassified": len(by_theme.get("_none", [])),
-        "source": "artlist-combined",
-        "fetched_at": dt.datetime.now().isoformat(timespec="minutes"),
+        "source": "artlist-pool",
+        "fetch": fetch,
+        "fetched_at": pool.get("last_ok") or pool.get("updated"),
     }
-    if out["ok"]:
-        cache_set(ck, out, Config.GDELT_CACHE_TTL)
-        cache_set(ck + ":last", out, LAST_GOOD_TTL)
-    return out
+
+
+def _empty_themes():
+    return [{"key": k, "label": v[0], "color": v[2], "count": 0, "articles": 0,
+             "ok": False} for k, v in Config.WORLD_THEMES.items()]
 
 
 def _classify_articles(arts) -> dict:
@@ -246,8 +308,16 @@ def _classify_articles(arts) -> dict:
 
 
 def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dict:
-    """จุดข่าวของธีมเดียว — หยิบจาก snapshot ที่ยิงครั้งเดียว (ไม่ยิงเพิ่ม)"""
-    snap = world_snapshot(timespan)
+    """
+    จุดข่าวของธีมเดียว — อ่านจากคลัง **ไม่ยิงเน็ตเพิ่ม**
+
+    สำคัญ: ผู้ใช้กดสลับธีมบนหน้าเว็บได้รัว ๆ ถ้าฟังก์ชันนี้ยิง GDELT ทุกครั้ง
+    จะกลายเป็น 9 คำขอต่อการดูหนึ่งครั้ง = ปัญหาเดิมที่ทำให้ลูกโลกพัง
+    ยิงได้กรณีเดียวคือคลังยังว่างสนิท (เช่นเปิดแอปครั้งแรก)
+    """
+    snap = world_snapshot(timespan, refill=False)
+    if not snap.get("points") and not snap.get("pool_size"):
+        snap = world_snapshot(timespan, refill=True)
     label, q, color = Config.WORLD_THEMES.get(
         theme, ("ข่าวทั่วโลก", query or "", "#4dd4ff"))
     pts = [p for p in snap.get("points", []) if not theme or p.get("theme") == theme]
@@ -313,32 +383,25 @@ def _links_from_html(html: str):
 
 
 def all_theme_points(timespan: str = "24h") -> dict:
-    """
-    จุดข่าวทุกธีมสำหรับหน้าลูกโลก — ใช้คำขอเดียว (ดู world_snapshot)
-
-    เดิมฟังก์ชันนี้วนยิงธีมละครั้ง = 9 คำขอ ซึ่งเป็นต้นเหตุที่ลูกโลกว่างเปล่า
-    เพราะพอคำขอแรกโดนปฏิเสธ ที่เหลือก็ล้มตามกันหมด
-    """
+    """จุดข่าวทุกธีมสำหรับหน้าลูกโลก — 1 คำขอต่อการเปิดหน้า (ดู world_snapshot)"""
     snap = world_snapshot(timespan)
-    themes = snap.get("themes") or [
-        {"key": k, "label": v[0], "color": v[2], "count": 0, "ok": False}
-        for k, v in Config.WORLD_THEMES.items()
-    ]
+    themes = snap.get("themes") or _empty_themes()
     empty = [t for t in themes if not t.get("count")]
+    f = snap.get("fetch") or {}
 
     notes = []
-    if snap.get("stale"):
-        notes.append(snap.get("note") or "แสดงข้อมูลที่เก็บไว้ก่อนหน้า (ดึงสดไม่ได้ตอนนี้)")
     if snap.get("ok") and empty:
-        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวเข้าเกณฑ์ในช่วงนี้")
+        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวในคลัง — ระบบทยอยเก็บเพิ่มทุกครั้งที่เปิดหน้านี้")
+    if f and f.get("tried") and not f.get("ok"):
+        notes.append("รอบนี้ GDELT ปฏิเสธคำขอ — แสดงจากคลังที่สะสมไว้")
 
     return {
         "themes": themes,
         "points": snap.get("points", []),
-        "timespan": snap.get("timespan", timespan),
+        "timespan": timespan,
         "ok": snap.get("ok", False),
         "skipped_themes": len(empty) if snap.get("ok") else len(themes),
-        "stale_themes": len(themes) if snap.get("stale") else 0,
+        "pool_size": snap.get("pool_size", 0),
         "articles_seen": snap.get("articles_seen"),
         "unclassified": snap.get("unclassified"),
         "error": snap.get("error"),
@@ -348,10 +411,11 @@ def all_theme_points(timespan: str = "24h") -> dict:
 
 
 def warm_cache(timespan: str = "24h") -> dict:
-    """อุ่น cache จุดข่าวไว้ล่วงหน้า — เรียกจากเธรดเบื้องหลัง ไม่ให้ผู้ใช้ต้องรอ"""
-    res = all_theme_points(timespan=timespan)
-    return {"points": len(res.get("points", [])),
-            "skipped": res.get("skipped_themes", 0)}
+    """เติมคลังข่าวล่วงหน้าจากเธรดเบื้องหลัง — ทำหลายคำต่อรอบได้เพราะไม่มีใครรออยู่"""
+    res = refill_pool(rounds=3)
+    snap = world_snapshot(timespan, refill=False)
+    return {"fetched": res, "points": len(snap.get("points", [])),
+            "pool_size": snap.get("pool_size", 0)}
 
 
 # ---------------------------------------------------------------------------

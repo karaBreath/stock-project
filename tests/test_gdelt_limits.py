@@ -103,6 +103,7 @@ def test_during_cooldown_no_requests_are_sent(monkeypatch):
 # ---------------------------------------------------------------------------
 # 2) จุดบนลูกโลกต้องมาจาก ArtList + ประเทศ (ไม่ใช่ GEO ที่ตายแล้ว)
 # ---------------------------------------------------------------------------
+# ข่าวจำลอง — ครอบคลุมทุกธีมและมีเคสขอบ (ประเทศไม่รู้จัก / ไม่เข้าธีมไหน)
 ARTS = [
     {"title": "Stock market rallies as inflation cools", "url": "http://a",
      "sourcecountry": "United States"},
@@ -120,23 +121,32 @@ ARTS = [
      "sourcecountry": "Thailand"},
     {"title": "Retailer cuts full-year guidance after weak revenue", "url": "http://h",
      "sourcecountry": "United Kingdom"},
-    {"title": "Local bakery wins award", "url": "http://i",          # ไม่เข้าธีมไหน
-     "sourcecountry": "France"},
+    {"title": "Local bakery wins award", "url": "http://i",
+     "sourcecountry": "France"},                                   # ไม่เข้าธีมไหน
     {"title": "Report from an unmapped place", "url": "http://j",
-     "sourcecountry": "Neverland"},                                   # ประเทศไม่รู้จัก
+     "sourcecountry": "Neverland"},                                # ประเทศไม่รู้จัก
 ]
 
 
-def _mock_one_request(monkeypatch, arts=None, store=None):
-    """ปลอมชั้น HTTP + นับจำนวนคำขอ เพื่อพิสูจน์ว่ายิงครั้งเดียวจริง"""
-    calls = {"n": 0}
+def _fake_gdelt(monkeypatch, per_call=None, store=None):
+    """
+    ปลอมชั้น HTTP + นับจำนวนคำขอ + ตรวจว่าคำขอ "ถูกรูปแบบที่วัดแล้วว่าผ่าน"
+    per_call: ฟังก์ชัน(word, n) -> รายการข่าว (None = คืน ARTS ทุกครั้ง)
+    """
+    calls = {"n": 0, "words": []}
     store = store if store is not None else {}
 
     def fake_fetch(path, params, retries=1, timeout=None):
         calls["n"] += 1
-        assert path == "doc/doc", "ต้องไม่ใช้ geo/geo ที่ตอบ 404"
+        word = params.get("query", "")
+        calls["words"].append(word)
+        # ข้อจำกัดจริงจาก GDELT (วัดแล้ว): ต้องเป็นคำเดียว + maxrecords=50
+        assert path == "doc/doc"
         assert params.get("mode") == "ArtList"
-        return {"articles": ARTS if arts is None else arts}
+        assert " OR " not in word, "คำค้นที่มี OR โดน GDELT ปฏิเสธ 100% ห้ามใช้"
+        assert " " not in word.strip(), "ต้องเป็นคำเดียวเท่านั้น"
+        assert params.get("maxrecords") == G.Config.WORLD_MAXRECORDS
+        return {"articles": (per_call(word, calls["n"]) if per_call else list(ARTS))}
 
     monkeypatch.setattr(G, "_fetch_json", fake_fetch)
     monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
@@ -144,28 +154,85 @@ def _mock_one_request(monkeypatch, arts=None, store=None):
     return calls, store
 
 
-def test_globe_uses_exactly_one_request_for_all_themes(monkeypatch):
+def test_page_load_sends_exactly_one_request(monkeypatch):
     """
-    หัวใจของการแก้ลูกโลก: ทุกธีมต้องมาจากคำขอเดียว
+    เปิดหน้าลูกโลก 1 ครั้ง = ยิง GDELT ครั้งเดียวเท่านั้น
 
-    เดิมยิงธีมละครั้ง (9 ครั้ง) พอครั้งแรกโดนปฏิเสธ ที่เหลือล้มตามกันหมด
-    ลูกโลกจึงว่างเปล่า — เทสนี้กันไม่ให้กลับไปเป็นแบบนั้นอีก
+    เดิมยิงธีมละครั้ง (9 ครั้ง) ซึ่งวัดแล้วไม่มีทางสำเร็จครบ ลูกโลกจึงว่างเปล่า
+    เทสนี้กันไม่ให้กลับไปเป็นแบบนั้นอีก
     """
-    calls, _ = _mock_one_request(monkeypatch)
-    res = G.all_theme_points(timespan="24h")
-
+    calls, _ = _fake_gdelt(monkeypatch)
+    res = G.all_theme_points("24h")
     assert calls["n"] == 1, f"ต้องยิงครั้งเดียว แต่ยิง {calls['n']} ครั้ง"
-    assert res["ok"] and res["points"], "ต้องได้จุดมาวาด"
-    assert len(res["themes"]) == len(G.Config.WORLD_THEMES), "ต้องมีทุกธีมในผล"
-    assert res["articles_seen"] == len(ARTS)
+    assert res["ok"] and res["points"]
 
 
-def test_articles_are_classified_into_right_themes(monkeypatch):
-    _mock_one_request(monkeypatch)
+def test_request_shape_matches_what_gdelt_accepts(monkeypatch):
+    """รูปแบบคำขอต้องตรงกับที่วัดแล้วว่าผ่าน (คำเดียว + maxrecords=50)"""
+    calls, _ = _fake_gdelt(monkeypatch)          # assertion อยู่ใน fake_fetch
+    G.refill_pool(rounds=1)
+    assert calls["n"] == 1
+    assert calls["words"][0] in G.Config.WORLD_FETCH_WORDS
+
+
+def test_words_rotate_so_pool_covers_more_themes(monkeypatch):
+    """เปิดหน้าหลายครั้งต้องวนคำไปเรื่อย ๆ ไม่ยิงคำเดิมซ้ำ"""
+    calls, store = _fake_gdelt(monkeypatch)
+    for _ in range(4):
+        G.world_snapshot("24h")
+    assert len(set(calls["words"])) == 4, f"ต้องวนคำ แต่ได้ {calls['words']}"
+
+
+def test_pool_survives_failed_fetch(monkeypatch):
+    """
+    หัวใจของความทนทาน: คำที่ยิงรอบนี้ล้ม ลูกโลกต้องยังวาดจากคลังเดิมได้
+
+    (วัดจริงแล้ว GDELT ปฏิเสธราว 20% ของคำขอที่ถูกรูปแบบ จึงต้องทนได้)
+    """
+    calls, store = _fake_gdelt(monkeypatch,
+                               per_call=lambda w, n: list(ARTS) if n == 1 else [])
+    first = G.all_theme_points("24h")
+    assert first["ok"] and first["points"]
+
+    second = G.all_theme_points("24h")           # รอบนี้ GDELT คืนว่าง
+    assert second["ok"], "ต้องยังวาดลูกโลกได้จากคลังเดิม"
+    assert len(second["points"]) == len(first["points"])
+    assert "ปฏิเสธ" in (second.get("note") or ""), "ต้องบอกผู้ใช้ว่ารอบนี้ดึงสดไม่ได้"
+
+
+def test_pool_dedupes_and_accumulates(monkeypatch):
+    """ข่าวซ้ำต้องไม่นับซ้ำ · ข่าวใหม่ต้องสะสมเพิ่ม"""
+    def per_call(word, n):
+        if n == 1:
+            return list(ARTS)
+        return [{"title": "Chip plant expands in Korea", "url": "http://new1",
+                 "sourcecountry": "South Korea"}] + list(ARTS[:3])   # ซ้ำ 3 ชิ้น
+
+    calls, store = _fake_gdelt(monkeypatch, per_call=per_call)
+    G.refill_pool(1)
+    size1 = len(G._pool_load()["articles"])
+    G.refill_pool(1)
+    size2 = len(G._pool_load()["articles"])
+    assert size1 == len(ARTS)
+    assert size2 == size1 + 1, f"ควรเพิ่มแค่ข่าวใหม่ 1 ชิ้น แต่ได้ {size2 - size1}"
+
+
+def test_pool_drops_articles_older_than_window(monkeypatch):
+    import time as _t
+    old = [{"title": "Old market news", "url": "http://old",
+            "sourcecountry": "Japan",
+            "_t": _t.time() - (G.Config.WORLD_POOL_HOURS + 2) * 3600}]
+    fresh = [{"title": "Fresh market news", "url": "http://fresh",
+              "sourcecountry": "Japan", "_t": _t.time()}]
+    kept = G._pool_prune(old + fresh)
+    urls = {a["url"] for a in kept}
+    assert "http://fresh" in urls and "http://old" not in urls
+
+
+def test_articles_classified_into_right_themes(monkeypatch):
+    _fake_gdelt(monkeypatch)
     snap = G.world_snapshot("24h")
     got = {t["key"]: t["count"] for t in snap["themes"]}
-
-    # ธีมที่มีข่าวชัดเจนในชุดทดสอบ ต้องมีจุด
     for key in ("market", "inflation", "tech", "trade", "conflict",
                 "energy", "disaster", "thailand", "earnings"):
         assert got.get(key, 0) > 0, f"ธีม {key} ควรมีจุดจากข่าวที่ให้ไป"
@@ -174,50 +241,37 @@ def test_articles_are_classified_into_right_themes(monkeypatch):
 
 def test_theme_filter_does_not_fire_extra_requests(monkeypatch):
     """กดกรองธีมบนหน้าเว็บ ต้องไม่ยิง GDELT เพิ่ม"""
-    calls, store = _mock_one_request(monkeypatch)
+    calls, _ = _fake_gdelt(monkeypatch)
     G.world_snapshot("24h")
     before = calls["n"]
-
     for key in G.Config.WORLD_THEMES:
-        r = G.world_points(theme=key, timespan="24h")
-        assert r["theme"] == key
-    assert calls["n"] == before, "การกรองธีมต้องใช้ข้อมูลเดิม ไม่ยิงใหม่"
+        assert G.world_points(theme=key, timespan="24h")["theme"] == key
+    assert calls["n"] == before, "การกรองธีมต้องใช้คลังเดิม ไม่ยิงใหม่"
 
 
-def test_unknown_country_skipped_and_counts_correct(monkeypatch):
-    _mock_one_request(monkeypatch)
+def test_unknown_country_skipped(monkeypatch):
+    _fake_gdelt(monkeypatch)
     snap = G.world_snapshot("24h")
     names = {p["name"] for p in snap["points"]}
-    assert "Neverland" not in names, "ประเทศที่ไม่มีพิกัดต้องถูกข้าม"
-    assert "United States" in names and "Thailand" in names
-
-    us_market = [p for p in snap["points"]
-                 if p["name"] == "United States" and p["theme"] == "market"]
-    assert us_market and us_market[0]["count"] >= 1
-    assert us_market[0]["articles"], "ต้องมีลิงก์ข่าวให้คลิกดู"
+    assert "Neverland" not in names and "United States" in names
+    us = [p for p in snap["points"]
+          if p["name"] == "United States" and p["theme"] == "market"]
+    assert us and us[0]["articles"], "ต้องมีลิงก์ข่าวให้คลิกดู"
 
 
-def test_globe_reports_failure_when_no_data_and_no_cache(monkeypatch):
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
-    monkeypatch.setattr(G, "cache_get", lambda k: None)
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
-    res = G.all_theme_points()
+def test_reports_error_when_pool_empty_and_fetch_fails(monkeypatch):
+    _fake_gdelt(monkeypatch, per_call=lambda w, n: [])
+    res = G.all_theme_points("24h")
     assert res["ok"] is False and res.get("error")
-    assert res["points"] == [] and len(res["themes"]) == len(G.Config.WORLD_THEMES)
+    assert len(res["themes"]) == len(G.Config.WORLD_THEMES)
 
 
-def test_globe_falls_back_to_last_good_snapshot(monkeypatch):
-    """ดึงสดไม่ได้ -> ต้องแสดง snapshot ล่าสุดที่เคยได้ พร้อมบอกว่าเป็นของเก่า"""
-    calls, store = _mock_one_request(monkeypatch)
-    first = G.all_theme_points("24h")
-    assert first["ok"] and not first.get("stale_themes")
-
-    store.pop("gdelt:snap:24h", None)                    # cache สดหมดอายุ
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)   # แล้วดึงสดล้ม
-
-    second = G.all_theme_points("24h")
-    assert len(second["points"]) == len(first["points"]), "ต้องได้จุดเดิมกลับมา"
-    assert second["stale_themes"] > 0 and second.get("note")
+def test_background_warm_fetches_more_words(monkeypatch):
+    """ตัวเก็บเบื้องหลังไม่มีใครรอ จึงเติมได้หลายคำต่อรอบ"""
+    calls, _ = _fake_gdelt(monkeypatch)
+    G.warm_cache("24h")
+    assert calls["n"] == 3, f"ควรเติม 3 คำต่อรอบ แต่ยิง {calls['n']}"
+    assert len(set(calls["words"])) == 3
 
 
 def test_theme_points_offset_so_bars_do_not_overlap(monkeypatch):
@@ -228,7 +282,7 @@ def test_theme_points_offset_so_bars_do_not_overlap(monkeypatch):
         {"title": "Chip maker expands data center", "url": "http://c",
          "sourcecountry": "Japan"},
     ]
-    _mock_one_request(monkeypatch, arts=arts)
+    _fake_gdelt(monkeypatch, per_call=lambda w, n: list(arts))
     snap = G.world_snapshot("24h")
     a = [p for p in snap["points"] if p["theme"] == "conflict"][0]
     b = [p for p in snap["points"] if p["theme"] == "tech"][0]

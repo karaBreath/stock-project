@@ -102,13 +102,19 @@ class Config:
                      '("Thailand economy" OR "Thai baht" OR "Thai stocks" OR Bangkok)', "#4dd4ff"),
     }
 
-    # คำค้นรวมทุกธีมในคำขอเดียว — ใช้กับลูกโลก
-    # เหตุผล: ยิงธีมละครั้ง (9 ครั้ง) แทบไม่มีทางสำเร็จครบ เพราะ GDELT จำกัดอัตราแรง
-    # จึงยิงครั้งเดียวกว้าง ๆ แล้วมาแยกธีมเองในเครื่องด้วย WORLD_THEME_KEYWORDS
-    WORLD_COMBINED_QUERY = os.environ.get(
-        "WORLD_COMBINED_QUERY",
-        '("stock market" OR inflation OR tariff OR semiconductor OR '
-        '"oil price" OR war OR earthquake OR earnings OR Thailand)')
+    # คำค้นสำหรับลูกโลก — วัดจริงแล้ว GDELT ArtList รับได้เฉพาะรูปแบบนี้:
+    #   คำเดียว + maxrecords=50   -> ผ่าน 4/5 ครั้ง
+    #   คำค้นที่มี OR หลายคำ       -> โดนปฏิเสธ 0/6 ครั้ง (ไม่มีทางสำเร็จ)
+    #   maxrecords 5/100/250/ไม่ระบุ -> โดนปฏิเสธทุกครั้ง
+    # จึงยิงทีละคำ วนไปเรื่อย ๆ แล้วสะสมข่าวไว้ในคลังร่วม (ดู gdelt.world_snapshot)
+    WORLD_FETCH_WORDS = tuple(w.strip() for w in os.environ.get(
+        "WORLD_FETCH_WORDS",
+        "economy,market,inflation,energy,war,chip,tariff,earthquake,Thailand,"
+        "earnings,oil,flood"
+    ).split(",") if w.strip())
+    WORLD_MAXRECORDS = int(os.environ.get("WORLD_MAXRECORDS", "50"))
+    WORLD_POOL_HOURS = int(os.environ.get("WORLD_POOL_HOURS", "36"))   # อายุข่าวในคลัง
+    WORLD_POOL_MAX = int(os.environ.get("WORLD_POOL_MAX", "600"))      # เก็บสูงสุดกี่ข่าว
 
     # คำที่ใช้แยกธีมจากพาดหัวข่าว (ตัวเล็กทั้งหมด · ตรงกับ query ของแต่ละธีม)
     WORLD_THEME_KEYWORDS = {
