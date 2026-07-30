@@ -142,14 +142,25 @@ def start_app(port: int, token: str):
     return subprocess.Popen([py, str(BASE / "app.py")], env=env)
 
 
-def wait_until_up(port: int, seconds: int = 90) -> bool:
+def wait_until_up(port: int, proc=None, seconds: int = 90) -> bool:
+    """
+    รอจน "แอปที่เราเพิ่งเปิด" พร้อมใช้งาน
+
+    ⚠️ ต้องเช็คด้วยว่า process ยังอยู่ไหม ไม่ใช่ดูแค่ /health ตอบ
+    เจอจริงตอนทดสอบ: มีแอปเก่าค้างอยู่ที่พอร์ตเดิม ตัวใหม่จึงเปิดไม่ขึ้น
+    ("Address already in use") แต่ /health ยังตอบ 200 เพราะเป็นของตัวเก่า
+    ระบบเลยบอกว่า "แอปพร้อมแล้ว" ทั้งที่ตัวที่เราเปิดตายไปแล้ว
+    แถวนั้นอันตราย เพราะตัวเก่าอาจ "ไม่ได้ล็อกกุญแจ" แล้วเราเอาไปเปิดออกเน็ต
+    """
     for _ in range(seconds):
+        if proc is not None and proc.poll() is not None:
+            return False
         time.sleep(1)
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/health",
                                         timeout=2) as r:
                 if r.status == 200:
-                    return True
+                    return proc is None or proc.poll() is None
         except Exception:
             continue
     return False
@@ -230,10 +241,19 @@ def main():
 
     say("  เปิดแอปในเครื่อง ...")
     app_proc = start_app(port, token)
-    if not wait_until_up(port):
-        app_proc.terminate()
-        die("แอปไม่ตอบภายใน 90 วินาที",
-            "ลองเปิด start.bat ดูก่อนว่ามีข้อความผิดพลาดอะไรไหม")
+    if not wait_until_up(port, app_proc):
+        try:
+            app_proc.terminate()
+        except Exception:
+            pass
+        die(f"เปิดแอปที่พอร์ต {port} ไม่สำเร็จ",
+            f"สาเหตุที่พบบ่อยที่สุด: มีแอปเปิดค้างอยู่แล้วที่พอร์ต {port}",
+            "",
+            "วิธีแก้: ปิดหน้าต่าง start.bat / share.bat อันเก่าให้หมดก่อน",
+            f"        หรือเปลี่ยนพอร์ตในไฟล์ .env เป็นเลขอื่น เช่น PORT={port + 1}",
+            "",
+            "⚠️ ระบบไม่เปิด tunnel ให้ เพราะแอปที่ค้างอยู่นั้นอาจไม่ได้ล็อกกุญแจ",
+            "   ถ้าเปิดออกเน็ตไปเลยจะกลายเป็นเปิดพอร์ตและ MT5 ให้คนอื่นดู")
     say(f"  แอปพร้อมแล้วที่ http://127.0.0.1:{port}")
 
     say("  กำลังเปิด tunnel ...")
@@ -249,6 +269,8 @@ def main():
                 break
             if tun.poll() is not None:
                 say("  tunnel หลุด — ปิดแอปด้วย")
+                say("  ถ้าเห็นข้อความ 'Host not in allowlist' ด้านบน แปลว่าเครือข่าย")
+                say("  ที่ใช้อยู่บล็อก Cloudflare ไว้ ลองเปลี่ยนเน็ต/ปิด VPN แล้วรันใหม่")
                 break
     except KeyboardInterrupt:
         pass
