@@ -107,19 +107,52 @@ class Config:
     #   คำค้นที่มี OR หลายคำ       -> โดนปฏิเสธ 0/6 ครั้ง (ไม่มีทางสำเร็จ)
     #   maxrecords 5/100/250/ไม่ระบุ -> โดนปฏิเสธทุกครั้ง
     # จึงยิงทีละคำ วนไปเรื่อย ๆ แล้วสะสมข่าวไว้ในคลังร่วม (ดู gdelt.world_snapshot)
+    # คำที่ใช้ไล่เก็บข่าว — GDELT รับได้แค่ "คำเดียวต่อคำขอ" (วัดแล้ว) จึงต้องวนหลายคำ
+    # เดิมมีแค่ 12 คำ ทำให้ลูกโลกขาดจุดสำคัญของโลกไปเยอะ (ไม่มีอิหร่าน/อิสราเอล/
+    # ฮอร์มุซ/ไต้หวัน/เฟด) และตลาดอเมริกาแทบไม่มีข่าว — ขยายให้ครอบคลุมทั้ง
+    # จุดร้อนภูมิรัฐศาสตร์ · ตลาดอเมริกา · สินค้าโภคภัณฑ์ · เทคโนโลยี · ภัยพิบัติ
     WORLD_FETCH_WORDS = tuple(w.strip() for w in os.environ.get(
         "WORLD_FETCH_WORDS",
-        "economy,market,inflation,energy,war,chip,tariff,earthquake,Thailand,"
-        "earnings,oil,flood"
+        # เศรษฐกิจ/ตลาด (เน้นอเมริกาเป็นหลักตามที่ใช้งาน)
+        "Nasdaq,earnings,Fed,Treasury,recession,stocks,inflation,dollar,"
+        # ภูมิรัฐศาสตร์และจุดร้อน
+        "Iran,Israel,Hormuz,Ukraine,Russia,Taiwan,Gaza,sanctions,tariff,NATO,"
+        # พลังงาน/โภคภัณฑ์
+        "oil,OPEC,gas,gold,copper,uranium,wheat,"
+        # เทคโนโลยี/อุตสาหกรรม
+        "semiconductor,chip,Nvidia,AI,datacenter,"
+        # ภัยพิบัติ/เหตุการณ์
+        "earthquake,flood,hurricane,wildfire,drought,outbreak,"
+        # ภูมิภาคอื่นที่กระทบตลาด + ไทย
+        "China,Japan,India,Europe,Thailand"
     ).split(",") if w.strip())
     # คำที่ยิงไปหมายถึงธีมไหน — ใช้เป็นตัวช่วยเมื่อพาดหัวไม่มีคำที่แยกธีมได้
     # (วัดจริง: ข่าว 149 ชิ้นแยกธีมจากพาดหัวได้แค่ 24 ชิ้น อีก 125 ชิ้นถูกทิ้ง
     #  ทั้งที่เรารู้อยู่แล้วว่าไปค้นมาด้วยคำอะไร — ข้อมูลนี้ใช้ได้และซื่อสัตย์)
     WORLD_WORD_THEME = {
-        "economy": "market", "market": "market", "inflation": "inflation",
-        "energy": "energy", "oil": "energy", "war": "conflict",
-        "chip": "tech", "tariff": "trade", "earthquake": "disaster",
-        "flood": "disaster", "thailand": "thailand", "earnings": "earnings",
+        # เศรษฐกิจ/ตลาด
+        "economy": "market", "market": "market", "stocks": "market",
+        "nasdaq": "market", "dollar": "market", "recession": "market",
+        "fed": "inflation", "treasury": "inflation", "inflation": "inflation",
+        "earnings": "earnings",
+        # ภูมิรัฐศาสตร์
+        "iran": "conflict", "israel": "conflict", "hormuz": "conflict",
+        "ukraine": "conflict", "russia": "conflict", "taiwan": "conflict",
+        "gaza": "conflict", "nato": "conflict", "war": "conflict",
+        "sanctions": "trade", "tariff": "trade",
+        # พลังงาน/โภคภัณฑ์
+        "oil": "energy", "opec": "energy", "gas": "energy",
+        "energy": "energy", "uranium": "energy",
+        "gold": "market", "copper": "trade", "wheat": "trade",
+        # เทคโนโลยี
+        "semiconductor": "tech", "chip": "tech", "nvidia": "tech",
+        "ai": "tech", "datacenter": "tech",
+        # ภัยพิบัติ
+        "earthquake": "disaster", "flood": "disaster", "hurricane": "disaster",
+        "wildfire": "disaster", "drought": "disaster", "outbreak": "disaster",
+        # ภูมิภาค
+        "china": "trade", "japan": "market", "india": "market",
+        "europe": "market", "thailand": "thailand",
     }
     WORLD_MAXRECORDS = int(os.environ.get("WORLD_MAXRECORDS", "50"))
     WORLD_POOL_HOURS = int(os.environ.get("WORLD_POOL_HOURS", "36"))   # อายุข่าวในคลัง

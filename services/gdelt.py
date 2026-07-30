@@ -244,9 +244,10 @@ def refill_pool(rounds: int = 1) -> dict:
 #                                            โอกาสได้ข่าวมีแค่ ~50% ลูกโลกจึงว่างบ่อย
 # วิธีแก้: เปิดหน้า = อ่านจากคลังทันที (ไม่รอเน็ตเลย) แล้วสั่งให้เธรดเบื้องหลัง
 # ไล่เก็บข่าวต่อจนคลังพอ ระหว่างนั้นหน้าเว็บ poll ดูคลังโตขึ้นแล้ววาดเพิ่มเอง
-FILL_TARGET = 120          # ข่าวในคลังที่ถือว่าพอวาดลูกโลกได้ดี
+FILL_TARGET = 120          # ข่าวในคลังขั้นต่ำ (เงื่อนไขแรกที่ต้องผ่าน)
+FILL_MIN_WORDS = 10        # และต้องมีข่าวจาก "หลายคำ" ไม่ใช่กระจุกอยู่คำเดียว
 FILL_MAX_SECONDS = 300     # ตัวเก็บทำงานต่อรอบไม่เกินเท่านี้
-FILL_MAX_ROUNDS = 24       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
+FILL_MAX_ROUNDS = 30       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
 FILL_GAP_SEC = 0           # ไม่ต้องเว้นเพิ่ม — _throttle บังคับ 5.5 วิ ตามกติกา GDELT อยู่แล้ว
 
 _filler_lock = threading.Lock()
@@ -261,18 +262,30 @@ def filler_state() -> dict:
     return st
 
 
+def pool_words(articles=None) -> set:
+    """คำค้นที่มีข่าวอยู่ในคลังแล้ว — ใช้วัดว่า 'ครอบคลุม' พอหรือยัง"""
+    arts = articles if articles is not None else _pool_load()["articles"]
+    return {(a.get("_w") or "").lower() for a in arts if a.get("_w")}
+
+
 def fill_rounds(target: int = FILL_TARGET, max_rounds: int = FILL_MAX_ROUNDS,
-                max_seconds: int = FILL_MAX_SECONDS, gap: float = FILL_GAP_SEC) -> dict:
+                max_seconds: int = FILL_MAX_SECONDS, gap: float = FILL_GAP_SEC,
+                min_words: int = FILL_MIN_WORDS) -> dict:
     """
-    ไล่เก็บข่าวจนคลังถึงเป้า — ล้มก็ลองคำถัดไป ไม่ยอมแพ้ตั้งแต่ครั้งแรก
+    ไล่เก็บข่าวจนคลัง "ครอบคลุมพอ" — ล้มก็ลองคำถัดไป ไม่ยอมแพ้ตั้งแต่ครั้งแรก
 
     เหตุผล: วัดจริงแล้ว GDELT ปฏิเสธราวครึ่งหนึ่งของคำขอที่ถูกรูปแบบทุกอย่าง
     ยิงครั้งเดียวแล้วเลิก = ลูกโลกว่าง 50% ของเวลา · ยิงต่อ 4 ครั้ง = พลาดหมด ~6%
+
+    เกณฑ์หยุดต้องผ่าน "ทั้งสองข้อ": จำนวนข่าว >= target และมาจากคำค้นต่างกัน
+    >= min_words — เพราะสำเร็จ 3 คำแล้วหยุด (บั๊กเดิม) ทำให้ข่าวกระจุกอยู่ 3 เรื่อง
+    ลูกโลกจึงขาดจุดสำคัญของโลกไปหมด ทั้งที่คลังดู "เต็ม" แล้ว
     """
     deadline = time.time() + max_seconds
     rounds = 0
     while rounds < max_rounds and time.time() < deadline:
-        if len(_pool_load()["articles"]) >= target:
+        pool_arts = _pool_load()["articles"]
+        if len(pool_arts) >= target and len(pool_words(pool_arts)) >= min_words:
             break
         if in_cooldown():
             time.sleep(min(cooldown_left() + 1, 10))
@@ -310,7 +323,8 @@ def ensure_filling() -> bool:
     with _filler_lock:
         if _filler["running"]:
             return True
-        if len(_pool_load()["articles"]) >= FILL_TARGET:
+        arts = _pool_load()["articles"]
+        if len(arts) >= FILL_TARGET and len(pool_words(arts)) >= FILL_MIN_WORDS:
             return False
         _filler.update({"running": True, "started": time.time(),
                         "tried": 0, "ok": 0, "added": 0, "finished": None})
@@ -458,8 +472,54 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     }
 
 
+_PLACE_RX = [None, None]      # [regex, {ชื่อตัวเล็ก: ชื่อจริง}]
+
+
+def _place_matcher():
+    """
+    ตัวจับ "ชื่อสถานที่ในพาดหัว" — เรียงชื่อยาวก่อนสั้น เพื่อให้
+    'South China Sea' ชนะ 'China' และ 'Strait of Hormuz' ชนะ 'Hormuz'
+    """
+    if _PLACE_RX[0] is not None:
+        return _PLACE_RX
+    names = country_geo.all_names()
+    ordered = sorted(names, key=len, reverse=True)
+    lookup = {n.lower(): n for n in ordered}
+    rx = re.compile(r"(?<![a-z0-9])(" +
+                    "|".join(re.escape(n.lower()) for n in ordered) +
+                    r")(?![a-z0-9])", re.I)
+    _PLACE_RX[0], _PLACE_RX[1] = rx, lookup
+    return _PLACE_RX
+
+
+def _location_of(a: dict):
+    """
+    หา "ที่ที่ข่าวพูดถึง" ให้ได้ก่อน แล้วค่อยถอยไปใช้ประเทศของสำนักข่าว
+
+    ทำไมสำคัญ: GDELT ไม่ให้พิกัดเหตุการณ์ (GEO 2.0 ปิดไปแล้ว) ให้แต่
+    sourcecountry = ประเทศของสำนักข่าว ข่าว "ตึงเครียดที่ช่องแคบฮอร์มุซ" ที่
+    Reuters เขียนจึงเคยไปโผล่ที่อเมริกา ลูกโลกดูมั่วเพราะเหตุนี้
+    ตอนนี้อ่านชื่อสถานที่จากพาดหัวก่อน → จุดตรงกับเรื่องจริง
+    คืน (ชื่อ, (lat, lon), มาจากไหน) โดย 'มาจากไหน' = 'headline' หรือ 'source'
+    """
+    rx, lookup = _place_matcher()
+    title = a.get("title") or ""
+    m = rx.search(title)
+    if m:
+        name = lookup.get(m.group(1).lower())
+        pos = country_geo.coords_for(name) if name else None
+        if pos:
+            return name, pos, "headline"
+
+    src = (a.get("sourcecountry") or "").strip()
+    pos = country_geo.coords_for(src)
+    if pos:
+        return src, pos, "source"
+    return None, None, None
+
+
 def _points_from_articles(arts, color: str, theme: str = "") -> list:
-    """รวมข่าวเป็นจุดรายประเทศ + เก็บลิงก์ข่าวตัวอย่างไว้ให้คลิกดู"""
+    """รวมข่าวเป็นจุดตามที่เกิดเหตุ + เก็บลิงก์ข่าวตัวอย่างไว้ให้คลิกดู"""
     # เลื่อนจุดของแต่ละธีมเล็กน้อย เพื่อไม่ให้แท่งของหลายธีมทับกันสนิท
     seed = sum(ord(c) for c in (theme or "x"))
     off_lat = ((seed % 7) - 3) * 0.55
@@ -467,26 +527,32 @@ def _points_from_articles(arts, color: str, theme: str = "") -> list:
 
     buckets = {}
     for a in arts:
-        country = (a.get("sourcecountry") or "").strip()
-        pos = country_geo.coords_for(country)
+        name, pos, how = _location_of(a)
         if not pos:
             continue
-        b = buckets.setdefault(country, {"count": 0, "articles": []})
+        b = buckets.setdefault(name, {"count": 0, "articles": [], "pos": pos,
+                                      "from_headline": 0})
         b["count"] += 1
-        if len(b["articles"]) < 5 and a.get("url"):
+        if how == "headline":
+            b["from_headline"] += 1
+        if len(b["articles"]) < 6 and a.get("url"):
             b["articles"].append({"title": (a.get("title") or "")[:160],
-                                  "url": a.get("url")})
+                                  "url": a.get("url"),
+                                  "source": a.get("domain", ""),
+                                  "where": how})
 
     points = []
-    for country, b in buckets.items():
-        lat, lon = country_geo.coords_for(country)
+    for name, b in buckets.items():
+        lat, lon = b["pos"]
         points.append({
             "lat": round(lat + off_lat, 4),
             "lon": round(lon + off_lon, 4),
-            "name": country,
+            "name": name,
             "count": b["count"],
             "color": color,
             "articles": b["articles"],
+            # กี่ข่าวที่รู้ที่เกิดเหตุจากพาดหัวจริง (ที่เหลือเดาจากประเทศสำนักข่าว)
+            "exact": b["from_headline"],
         })
     points.sort(key=lambda p: p["count"], reverse=True)
     return points[:Config.GDELT_MAX_POINTS]

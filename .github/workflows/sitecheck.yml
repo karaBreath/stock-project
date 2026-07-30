@@ -4,7 +4,9 @@ name: site-check
 
 on:
   push:
-    branches: ["claude/stock-trading-project-zjrrcz"]
+    # main คือกิ่งที่ Render deploy จริง — ต้องตรวจหลัง merge ทุกครั้ง
+    # (เดิมตั้งไว้เฉพาะกิ่งพัฒนา พอ merge เข้า main แล้วจึงไม่มีใครตรวจเว็บจริงเลย)
+    branches: ["main", "claude/stock-trading-project-zjrrcz"]
   workflow_dispatch:
     inputs:
       url:

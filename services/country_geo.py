@@ -75,6 +75,66 @@ ALIASES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# จุดสำคัญของโลกที่ "ไม่ใช่ประเทศ" แต่ข่าวเศรษฐกิจอ้างถึงบ่อยที่สุด
+# ---------------------------------------------------------------------------
+# เหตุผลที่ต้องมี: GDELT ให้แค่ประเทศของ "สำนักข่าว" ไม่ใช่ที่เกิดเหตุ
+# ข่าว "ช่องแคบฮอร์มุซ" ที่ Reuters เขียนจะไปโผล่ที่อเมริกา ทั้งที่เรื่องอยู่ตะวันออกกลาง
+# จึงต้องอ่านชื่อสถานที่จากพาดหัวเพื่อปักจุดให้ตรงที่จริง
+PLACES = {
+    # คอขวดการค้า/พลังงานของโลก — กระทบราคาน้ำมันและค่าระวางเรือทันที
+    "Strait of Hormuz": (26.6, 56.3), "Hormuz": (26.6, 56.3),
+    "Red Sea": (20.3, 38.5), "Bab el-Mandeb": (12.6, 43.4),
+    "Suez Canal": (30.6, 32.3), "Suez": (30.0, 32.6),
+    "Panama Canal": (9.1, -79.7),
+    "Taiwan Strait": (24.5, 119.5), "South China Sea": (13.0, 114.0),
+    "Strait of Malacca": (3.0, 100.5), "Malacca": (3.0, 100.5),
+    "Black Sea": (43.4, 34.3), "Baltic Sea": (57.5, 19.5),
+    "Persian Gulf": (26.7, 51.9), "Gulf of Mexico": (25.0, -90.0),
+    "English Channel": (50.2, 0.5),
+    # พื้นที่ขัดแย้ง/ภูมิภาคที่ข่าวอ้างถึงเป็นชื่อเฉพาะ
+    "Gaza": (31.4, 34.4), "Gaza Strip": (31.4, 34.4),
+    "West Bank": (32.0, 35.3), "Golan Heights": (33.0, 35.8),
+    "Donbas": (48.5, 38.0), "Crimea": (45.3, 34.4),
+    "Kashmir": (34.1, 74.8), "Kurdistan": (36.5, 44.0),
+    "Sahel": (15.0, 5.0), "Horn of Africa": (8.0, 45.0),
+    "Balkans": (43.0, 20.0), "Caucasus": (42.5, 44.0),
+    "Nagorno-Karabakh": (39.8, 46.8), "Sinai": (29.5, 33.8),
+    "Tigray": (14.0, 38.5), "Darfur": (13.0, 24.0),
+    # ศูนย์กลางการเงิน/นโยบายที่ข่าวเรียกชื่อแทนประเทศ
+    "Wall Street": (40.71, -74.01), "Washington": (38.9, -77.0),
+    "Silicon Valley": (37.4, -122.1), "Texas": (31.0, -99.0),
+    "California": (36.8, -119.4), "New York": (40.71, -74.01),
+    "Federal Reserve": (38.9, -77.0), "Capitol Hill": (38.89, -77.0),
+    "Wall St": (40.71, -74.01),
+    "Brussels": (50.85, 4.35), "Frankfurt": (50.11, 8.68),
+    "City of London": (51.51, -0.09), "Davos": (46.8, 9.83),
+    # เมืองหลวง/เมืองใหญ่ที่พาดหัวมักใช้แทนชื่อประเทศ
+    "Beijing": (39.9, 116.4), "Shanghai": (31.2, 121.5),
+    "Hong Kong": (22.3, 114.2), "Tokyo": (35.7, 139.7),
+    "Seoul": (37.6, 127.0), "Taipei": (25.0, 121.6),
+    "Moscow": (55.75, 37.6), "Kyiv": (50.45, 30.5), "Kiev": (50.45, 30.5),
+    "Tehran": (35.7, 51.4), "Tel Aviv": (32.1, 34.8),
+    "Jerusalem": (31.8, 35.2), "Riyadh": (24.7, 46.7),
+    "Dubai": (25.2, 55.3), "Doha": (25.3, 51.5), "Ankara": (39.9, 32.9),
+    "Istanbul": (41.0, 29.0), "Cairo": (30.0, 31.2),
+    "New Delhi": (28.6, 77.2), "Mumbai": (19.1, 72.9),
+    "Singapore City": (1.35, 103.8), "Jakarta": (-6.2, 106.8),
+    "Bangkok": (13.75, 100.5), "Hanoi": (21.0, 105.85),
+    "Manila": (14.6, 121.0), "Sydney": (-33.87, 151.2),
+    "Berlin": (52.5, 13.4), "Paris": (48.86, 2.35), "Madrid": (40.4, -3.7),
+    "Rome": (41.9, 12.5), "London": (51.51, -0.13),
+    "Ottawa": (45.4, -75.7), "Mexico City": (19.4, -99.1),
+    "Brasilia": (-15.8, -47.9), "Sao Paulo": (-23.55, -46.63),
+    "Buenos Aires": (-34.6, -58.4), "Lagos": (6.5, 3.4),
+    "Johannesburg": (-26.2, 28.0), "Nairobi": (-1.3, 36.8),
+    "Pyongyang": (39.0, 125.75), "Kabul": (34.5, 69.2),
+    "Baghdad": (33.3, 44.4), "Damascus": (33.5, 36.3),
+    "Beirut": (33.9, 35.5), "Sanaa": (15.4, 44.2),
+    "Khartoum": (15.6, 32.5), "Caracas": (10.5, -66.9),
+}
+
+
 def coords_for(country: str):
     """คืน (lat, lon) ของประเทศ หรือ None ถ้าไม่รู้จัก"""
     if not country:
@@ -85,8 +145,27 @@ def coords_for(country: str):
     alias = ALIASES.get(name)
     if alias:
         return COUNTRY_COORDS.get(alias)
-    return None
+    return PLACES.get(name)
+
+
+def place_coords(name: str):
+    """พิกัดของสถานที่ที่ไม่ใช่ประเทศ (ช่องแคบ/เมือง/ภูมิภาค)"""
+    return PLACES.get((name or "").strip())
+
+
+def all_names() -> dict:
+    """ชื่อทุกแบบที่รู้จัก -> (lat, lon) · ใช้สร้างตัวจับชื่อสถานที่จากพาดหัว"""
+    out = dict(PLACES)
+    out.update(COUNTRY_COORDS)
+    for alias, real in ALIASES.items():
+        if real in COUNTRY_COORDS and len(alias) > 3:   # 'US'/'UK' สั้นเกิน เจอผิดง่าย
+            out[alias] = COUNTRY_COORDS[real]
+    return out
 
 
 def known_count() -> int:
     return len(COUNTRY_COORDS)
+
+
+def place_count() -> int:
+    return len(PLACES)

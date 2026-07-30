@@ -214,7 +214,7 @@ def test_filler_keeps_trying_until_pool_is_full(monkeypatch):
     """
     calls, _ = _fake_gdelt(monkeypatch,
                            per_call=lambda w, n: [] if n <= 3 else list(ARTS))
-    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0)
+    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0, min_words=1)
     assert calls["n"] >= 4, f"ต้องลองต่อหลังล้ม แต่ยิงแค่ {calls['n']} ครั้ง"
     assert len(G._pool_load()["articles"]) == len(ARTS)
 
@@ -222,8 +222,22 @@ def test_filler_keeps_trying_until_pool_is_full(monkeypatch):
 def test_filler_stops_when_target_reached(monkeypatch):
     """ถึงเป้าแล้วต้องหยุด ไม่ยิง GDELT รัวไปเรื่อย ๆ"""
     calls, _ = _fake_gdelt(monkeypatch)
-    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0)
+    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0, min_words=1)
     assert calls["n"] == 1, f"ได้ครบตั้งแต่ครั้งแรกต้องหยุด แต่ยิง {calls['n']} ครั้ง"
+
+
+def test_filler_keeps_going_until_many_words_covered(monkeypatch):
+    """
+    บั๊กที่ผู้ใช้เจอ: คลัง 'เต็ม' ตั้งแต่สำเร็จ 3 คำ แล้วหยุด
+    ข่าวจึงกระจุกอยู่ 3 เรื่อง ลูกโลกขาดจุดสำคัญของโลก (อิหร่าน/ฮอร์มุซ/ไต้หวัน)
+    ตอนนี้ต้องเก็บต่อจนครอบคลุมหลายคำ ไม่ใช่พอแค่จำนวนข่าว
+    """
+    # ของจริงแต่ละคำได้ข่าวไม่ซ้ำกัน จึงต้องปลอมให้ url ต่างกันตามคำ
+    calls, _ = _fake_gdelt(monkeypatch, per_call=lambda w, n: [
+        {**a, "url": f"{a['url']}/{w}"} for a in ARTS])
+    G.fill_rounds(target=1, max_rounds=20, gap=0, min_words=6)
+    assert len(G.pool_words()) >= 6, f"ครอบคลุมแค่ {G.pool_words()}"
+    assert calls["n"] >= 6
 
 
 def test_filler_gives_up_after_max_rounds(monkeypatch):
@@ -608,3 +622,67 @@ def test_theme_keywords_match_whole_words_only(title, should_be_conflict):
     got = G._classify_articles([{"title": title, "url": "http://t",
                                  "sourcecountry": "France"}])
     assert ("conflict" in got) is should_be_conflict
+
+
+# ---------------------------------------------------------------------------
+# 3) จุดต้องปักที่ "ที่เกิดเหตุ" ไม่ใช่ประเทศของสำนักข่าว
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("title,source,expect", [
+    # เคสที่ผู้ใช้ยกมาเอง — ข่าวฮอร์มุซที่สำนักข่าวอเมริกาเขียน
+    ("Oil jumps as tensions escalate in the Strait of Hormuz",
+     "United States", "Strait of Hormuz"),
+    ("Iran signals response after strikes", "United States", "Iran"),
+    ("Israel and Hezbollah trade fire near the border",
+     "United Kingdom", "Israel"),
+    ("Shipping reroutes away from the Red Sea", "Singapore", "Red Sea"),
+    ("Taiwan Strait transit draws Beijing protest", "United States",
+     "Taiwan Strait"),                       # ชื่อยาวต้องชนะ 'Taiwan'/'Beijing'
+    ("South China Sea standoff continues", "Japan", "South China Sea"),
+    ("Gaza aid convoy delayed again", "France", "Gaza"),
+    ("Fed holds rates as Wall Street rallies", "Japan", "Wall Street"),
+    # ไม่มีชื่อสถานที่ในพาดหัว -> ถอยไปใช้ประเทศของสำนักข่าว
+    ("Quarterly profit beats expectations", "Germany", "Germany"),
+])
+def test_point_lands_where_the_news_happened(title, source, expect):
+    name, pos, how = G._location_of({"title": title, "sourcecountry": source})
+    assert name == expect, f"'{title}' ควรปักที่ {expect} แต่ได้ {name}"
+    assert pos is not None
+    assert how == ("source" if expect == source else "headline")
+
+
+def test_hotspots_have_coordinates():
+    """จุดสำคัญของโลกที่ข่าวเศรษฐกิจอ้างถึงบ่อย ต้องมีพิกัดให้ปักได้"""
+    must = ["Strait of Hormuz", "Red Sea", "Suez Canal", "Taiwan Strait",
+            "South China Sea", "Panama Canal", "Black Sea", "Gaza",
+            "Wall Street", "Silicon Valley"]
+    missing = [m for m in must if not CG.coords_for(m)]
+    assert not missing, f"ยังไม่มีพิกัดของ: {missing}"
+
+
+def test_fetch_words_cover_the_world_not_just_a_dozen():
+    """
+    คำค้นต้องครอบคลุมจุดสำคัญของโลก ไม่ใช่ 12 คำแบบเดิม
+    (ผู้ใช้ทักว่า 'ช่องแคบฮอร์มุซ สงครามอิหร่านอิสราเอลก็ไม่มี อเมริกาก็ข่าวน้อย')
+    """
+    words = {w.lower() for w in G.Config.WORLD_FETCH_WORDS}
+    for must in ["iran", "israel", "hormuz", "taiwan", "ukraine",
+                 "nasdaq", "fed", "opec", "semiconductor", "sanctions"]:
+        assert must in words, f"ขาดคำค้นสำคัญ: {must}"
+    assert len(words) >= 30, f"คำค้นน้อยเกินไป ({len(words)} คำ)"
+
+
+def test_point_reports_how_many_locations_are_certain(monkeypatch):
+    """ต้องรายงานอย่างซื่อสัตย์ว่ากี่ข่าวรู้ที่เกิดเหตุจริง กี่ข่าวเดาจากสำนักข่าว"""
+    arts = [
+        {"title": "Strait of Hormuz tension lifts crude", "url": "http://1",
+         "sourcecountry": "United States"},
+        {"title": "Quarterly results beat estimates", "url": "http://2",
+         "sourcecountry": "United States"},
+    ]
+    _fake_gdelt(monkeypatch, per_call=lambda w, n: list(arts))
+    G.refill_pool(1)
+    snap = G.world_snapshot("24h")
+    by_name = {p["name"]: p for p in snap["points"]}
+    assert "Strait of Hormuz" in by_name
+    assert by_name["Strait of Hormuz"]["exact"] == 1
+    assert by_name.get("United States", {}).get("exact") == 0
