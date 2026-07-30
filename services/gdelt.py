@@ -36,9 +36,13 @@ _UA = "NEBULA-Stock-App/1.0 (educational stock research)"
 # ถ้าขอยาวกว่านี้จะไม่ได้ข้อมูลเลย ไม่ใช่ได้ข้อมูลน้อยลง
 MAX_TIMESPAN_DAYS = 90
 
-# GDELT จำกัดอัตราการเรียกต่อ IP ค่อนข้างแรง (เจอ 429 บ่อยจากเซิร์ฟเวอร์ cloud)
-# จึงบังคับเว้นจังหวะระหว่างการเรียกทุกครั้ง + พักยาวเมื่อโดน 429 ติด ๆ กัน
-_MIN_GAP_SEC = 1.2
+# GDELT จำกัดอัตราการเรียก "ต่อ IP" และบอกกติกาไว้ในข้อความ 429 ของเขาเอง:
+#   "Please limit requests to one every 5 seconds or contact ... for larger queries"
+# (วัดจริงจากเซิร์ฟเวอร์ 2026-07-30 · เทียบ curl กับ python-requests แล้วผลเหมือนกัน
+#  แปลว่าไม่ใช่เรื่องตัวไคลเอนต์ แต่เป็นโควตาของ IP ล้วน ๆ)
+# จึงเว้นจังหวะ 5.5 วิ ตามที่เขาขอ — และเพราะ IP ที่ใช้ร่วมกัน (cloud/CI) จะโดน
+# นับรวมกับคนอื่นด้วย จึงยังเจอ 429 อยู่ดีเป็นครั้งคราว ระบบต้องทนได้ ไม่ใช่พังทั้งหน้า
+_MIN_GAP_SEC = 5.5
 _COOLDOWN_SEC = 30
 # พักเฉพาะเมื่อ "ล้มติดกันหลายครั้ง" — ล้มครั้งเดียวห้ามทำให้ทั้งระบบหยุด
 # (บั๊กที่เจอจริง: ล้ม 1 ครั้ง -> พัก 45 วิ -> ธีมที่เหลืออีก 8 ธีมถูกข้ามหมด
@@ -243,7 +247,7 @@ def refill_pool(rounds: int = 1) -> dict:
 FILL_TARGET = 120          # ข่าวในคลังที่ถือว่าพอวาดลูกโลกได้ดี
 FILL_MAX_SECONDS = 300     # ตัวเก็บทำงานต่อรอบไม่เกินเท่านี้
 FILL_MAX_ROUNDS = 24       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
-FILL_GAP_SEC = 5           # เว้นจังหวะระหว่างคำ (นอกเหนือจากเวลาที่ GDELT ใช้ตอบ)
+FILL_GAP_SEC = 0           # ไม่ต้องเว้นเพิ่ม — _throttle บังคับ 5.5 วิ ตามกติกา GDELT อยู่แล้ว
 
 _filler_lock = threading.Lock()
 _filler = {"running": False, "started": 0.0, "tried": 0, "ok": 0,
@@ -513,7 +517,7 @@ def all_theme_points(timespan: str = "24h") -> dict:
 
 def warm_cache(timespan: str = "24h") -> dict:
     """เติมคลังข่าวล่วงหน้าจากตัวเก็บข้อมูลรายชั่วโมง (บล็อกได้ เพราะไม่มีใครรออยู่)"""
-    res = fill_rounds(max_rounds=6, max_seconds=180, gap=2)
+    res = fill_rounds(max_rounds=6, max_seconds=180)
     snap = world_snapshot(timespan, refill=False)
     return {"fetched": res, "points": len(snap.get("points", [])),
             "pool_size": snap.get("pool_size", 0)}
