@@ -149,3 +149,46 @@ def test_warns_loudly_when_lock_is_disabled(capsys):
     share.banner("https://x.trycloudflare.com", "", 5000)
     out = capsys.readouterr().out
     assert "ไม่ล็อกกุญแจ" in out
+
+
+# ---------------------------------------------------------------------------
+# บั๊กที่เจอตอนเปิดใช้จริง: พอร์ตชนกัน
+# ---------------------------------------------------------------------------
+class DeadProc:
+    """process ที่ตายไปแล้ว (เช่นเปิดไม่ขึ้นเพราะ Address already in use)"""
+    def poll(self): return 1
+
+
+class LiveProc:
+    def poll(self): return None
+
+
+def test_dead_app_is_not_mistaken_for_ready(monkeypatch):
+    """
+    เจอจริง: มีแอปเก่าค้างที่พอร์ตเดิม ตัวใหม่จึงเปิดไม่ขึ้น แต่ /health ยังตอบ 200
+    เพราะเป็นของตัวเก่า ระบบเลยบอก "แอปพร้อมแล้ว" แล้วเปิด tunnel ต่อ
+    อันตราย เพราะตัวเก่าอาจไม่ได้ล็อกกุญแจ = เปิดพอร์ตกับ MT5 ให้คนอื่นดู
+    """
+    monkeypatch.setattr(share.time, "sleep", lambda s: None)
+    monkeypatch.setattr(share.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError(
+                            "ตายแล้วต้องเลิกทันที ไม่ต้องไปถาม /health")))
+    assert share.wait_until_up(5000, DeadProc(), seconds=3) is False
+
+
+def test_ready_only_when_our_own_process_is_alive(monkeypatch):
+    class Resp:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(share.time, "sleep", lambda s: None)
+    monkeypatch.setattr(share.urllib.request, "urlopen", lambda *a, **k: Resp())
+    assert share.wait_until_up(5000, LiveProc(), seconds=3) is True
+
+
+def test_gives_up_when_health_never_answers(monkeypatch):
+    monkeypatch.setattr(share.time, "sleep", lambda s: None)
+    monkeypatch.setattr(share.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("refused")))
+    assert share.wait_until_up(5000, LiveProc(), seconds=3) is False
