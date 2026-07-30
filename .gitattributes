@@ -1,0 +1,22 @@
+# สคริปต์ของ Windows ต้องเป็น CRLF เสมอ
+# ถ้าเป็น LF (แบบ Linux) cmd.exe จะอ่าน block if(...) หลายบรรทัดพลาด
+# แล้วปิดหน้าต่างตัวเองเงียบ ๆ — เป็นสาเหตุที่ "ดับเบิลคลิกแล้วไม่มีอะไรเกิดขึ้น"
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+*.vbs  text eol=crlf
+
+# ที่เหลือใช้ LF (Python/JS/HTML ทำงานได้ทั้งสองแบบ)
+*.py   text eol=lf
+*.js   text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+
+# ไฟล์ไบนารี ห้ามแตะ
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.db   binary
