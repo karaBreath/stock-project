@@ -13,6 +13,7 @@ from services import (
     macro, scoring, screener, portfolio, risk, backtest, institutional,
     alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
     selfcheck, volume_profile, strategy_lab, volume_edge,
+    trailing, freedom,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -476,3 +477,65 @@ def defaults():
         "line_configured": bool(Config.LINE_CHANNEL_TOKEN or Config.LINE_NOTIFY_TOKEN),
         "ai_mode": ai_advisory._mode(),
     })
+
+
+# ---------------- 18) Trailing stop ----------------
+@api.get("/trailing/portfolio")
+def trailing_portfolio_ep():
+    """จุดตัดขาดทุนแบบเลื่อนตามของทุกไม้ในพอร์ต"""
+    return jsonify(trailing.portfolio())
+
+
+@api.get("/trailing/<ticker>")
+def trailing_ticker_ep(ticker):
+    """
+    คำนวณให้หุ้นตัวเดียว — ระบุราคาที่เข้าและวันที่เข้าได้
+    ใช้ตอนอยากลองดูก่อนซื้อจริง หรือกับไม้ที่ไม่ได้บันทึกไว้ในพอร์ต
+    """
+    try:
+        entry = float(request.args.get("entry") or 0)
+    except ValueError:
+        entry = 0
+    if entry <= 0:
+        return jsonify({"ok": False, "error": "ต้องระบุราคาที่เข้า (entry)"}), 400
+    try:
+        mult = float(request.args.get("mult") or trailing.DEFAULT_MULT)
+    except ValueError:
+        mult = trailing.DEFAULT_MULT
+    return jsonify(trailing.for_ticker(ticker, entry,
+                                       request.args.get("date", ""), mult))
+
+
+# ---------------- 19) แผนอิสรภาพ ----------------
+def _money(name, default=0.0):
+    try:
+        return max(0.0, float(request.args.get(name) or default))
+    except ValueError:
+        return default
+
+
+@api.get("/freedom/plan")
+def freedom_plan_ep():
+    """
+    แผนทบต้นจากผลงานจริง — ไม่ให้กรอกผลตอบแทนเอง เพราะคนมักกรอกตัวเลขที่อยากได้
+    """
+    try:
+        years = int(request.args.get("years") or 10)
+    except ValueError:
+        years = 10
+    return jsonify(freedom.plan(
+        start=_money("start"), monthly_add=_money("monthly"),
+        target=_money("target"), years=years,
+        source=request.args.get("source", "auto")))
+
+
+@api.get("/freedom/performance")
+def freedom_performance_ep():
+    """สรุปผลงานจริงอย่างเดียว (ไม่ต้องจำลองอนาคต)"""
+    data = freedom.real_returns(request.args.get("source", "auto"))
+    if not data.get("ok"):
+        return jsonify({"ok": False, "error": data["error"],
+                        "how_to_fix": data.get("how_to_fix")})
+    return jsonify({"ok": True, "source": data["source"],
+                    "source_label": data["label"],
+                    "performance": freedom.stats_from_returns(data["returns"])})

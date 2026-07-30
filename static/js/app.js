@@ -80,6 +80,8 @@ const NAV = [
   { id: 'crisis',    label: 'บทเรียนวิกฤต', ic: '⚠️',  bottom: false },
   { id: 'lab',       label: 'แล็บกลยุทธ์', ic: '🧪',  bottom: false },
   { id: 'mt5',       label: 'พอร์ต MT5',   ic: '🤖',  bottom: false },
+  { id: 'freedom',   label: 'แผนอิสรภาพ',  ic: '🕊️',  bottom: false },
+  { id: 'trailing',  label: 'จุดตัดเลื่อนตาม', ic: '🪜', bottom: false },
   { id: 'tools',     label: 'เครื่องมือ', ic: '🧰',  bottom: false },
   { id: 'selfcheck', label: 'ตรวจระบบ',   ic: '🩺',  bottom: false },
   { id: 'report',    label: 'รายงานวันนี้',ic: '📰', bottom: false },

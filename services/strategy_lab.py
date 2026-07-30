@@ -22,7 +22,7 @@ import datetime as dt
 
 import numpy as np
 
-from services import gdelt, news_backtest, stock_data
+from services import events_data, gdelt, news_backtest, stock_data
 from services.volume_profile import SETUP_EXPECTANCY
 
 
@@ -78,18 +78,18 @@ STRATEGIES = {
     "pead": {
         "name": "Earnings drift (PEAD)",
         "family": "เหตุการณ์",
-        "runnable": False,
-        "planned": True,
-        "desc": ("หุ้นที่งบดีกว่าคาดมักไหลต่อ 1-3 เดือน — anomaly คลาสสิก "
-                 "(แผนถัดไป: ต้องมีข้อมูลวันประกาศงบ + ค่าคาดการณ์ย้อนหลัง)"),
+        "runnable": True,
+        "desc": ("งบดีกว่าที่ตลาดคาด แล้วราคามักไหลต่ออีกหลายสัปดาห์ — anomaly "
+                 "คลาสสิก (Ball & Brown 1968) · ใช้ได้เฉพาะหุ้นที่ Yahoo มีค่าคาดการณ์ "
+                 "ย้อนหลังให้ ซึ่งส่วนใหญ่เป็นหุ้นสหรัฐ"),
     },
     "insider": {
         "name": "ตามผู้บริหารซื้อหุ้นตัวเอง",
         "family": "เหตุการณ์",
-        "runnable": False,
-        "planned": True,
-        "desc": ("ผู้บริหารซื้อหุ้นบริษัทตัวเอง = สัญญาณที่มีสถิติรองรับ "
-                 "(แผนถัดไป: ต้องมีฟีดข้อมูล insider transactions ย้อนหลัง)"),
+        "runnable": True,
+        "desc": ("ผู้บริหารซื้อหุ้นบริษัทตัวเอง = คนที่รู้ดีที่สุดเอาเงินตัวเองลง "
+                 "· เข้าซื้อวันถัดจากวันทำรายการเสมอ (ข้อมูลถูกรายงานช้ากว่าจริง) "
+                 "· Yahoo ให้ย้อนหลังราว 1-2 ปี และแทบไม่มีหุ้นไทย"),
     },
 }
 
@@ -144,6 +144,96 @@ def _positions_trend(dates, closes):
             sma = run_sum / SMA_LEN
             pos[dates[i]] = 1 if closes[j] > sma else 0
     return pos, {"rule": f"ถือเมื่อราคาปิด > SMA{SMA_LEN}", "warmup_days": SMA_LEN}
+
+
+# ---------------------------------------------------------------------------
+# กลยุทธ์ตระกูล "เหตุการณ์" — ถือ N วันหลังเหตุการณ์
+# ---------------------------------------------------------------------------
+PEAD_HOLD_GRID = (10, 21, 42, 63)       # ~2 สัปดาห์ ถึง ~3 เดือน
+PEAD_MIN_SURPRISE = (0.0, 2.0, 5.0)     # เซอร์ไพรส์ขั้นต่ำ (%)
+INSIDER_HOLD_GRID = (10, 21, 42, 63)
+
+
+def _hold_after_events(dates, event_days, hold: int) -> dict:
+    """
+    สร้าง position: ถือ hold วันทำการ นับจาก "วันถัดจากวันเหตุการณ์"
+
+    ที่ต้องเป็นวันถัดไปเพราะข่าวงบออกหลังตลาดปิด และรายการ insider ถูกรายงาน
+    ช้ากว่าวันที่ทำจริง ถ้าเข้าวันเดียวกันคือมองเห็นข้อมูลที่ยังไม่มีใครรู้
+    """
+    pos = {d: 0 for d in dates}
+    if not event_days:
+        return pos
+    for ev in event_days:
+        i = bisect.bisect_right(dates, ev)      # วันทำการแรกที่ "หลัง" เหตุการณ์
+        for d in dates[i:i + hold]:
+            pos[d] = 1
+    return pos
+
+
+def _tune_on_train(dates, rets, train_set, events, grids, fee_pct):
+    """
+    เลือกพารามิเตอร์จาก "ช่วง train เท่านั้น" แล้วเอาไปใช้ทั้งเส้น
+
+    หัวใจของความซื่อสัตย์: ถ้าไปเลือกค่าที่ดีที่สุดบนช่วง test ด้วย
+    ตัวเลขที่ได้จะสวยแบบไม่มีความหมาย (overfit) — เราจึงตัดสินใจก่อนเห็น test
+    """
+    train_days = sorted(train_set)
+    best = None
+    for combo in grids:
+        pos = _hold_after_events(dates, combo["events"], combo["hold"])
+        res = _simulate_positions(train_days, rets, pos, fee_pct)
+        score = res.get("total_return", 0) or 0
+        if best is None or score > best["score"]:
+            best = {"score": score, "combo": combo, "pos": pos}
+    return best
+
+
+def _positions_pead(ticker, dates, rets, train_set, fee_pct):
+    data = events_data.earnings_surprises(ticker)
+    if not data.get("ok"):
+        return None, {"error": data.get("error") or "ไม่มีข้อมูลวันประกาศงบ"}
+
+    evs = data["events"]
+    grids = []
+    for hold in PEAD_HOLD_GRID:
+        for min_sur in PEAD_MIN_SURPRISE:
+            days_ = [e["day"] for e in evs if (e["surprise_pct"] or 0) > min_sur]
+            if len(days_) >= events_data.MIN_EVENTS:
+                grids.append({"hold": hold, "min_surprise": min_sur,
+                              "events": days_, "n": len(days_)})
+    if not grids:
+        return None, {"error": "งบที่ดีกว่าคาดมีน้อยเกินไปจนทดสอบไม่ได้"}
+
+    best = _tune_on_train(dates, rets, train_set, evs, grids, fee_pct)
+    c = best["combo"]
+    return best["pos"], {
+        "rule": (f"งบดีกว่าคาด > {c['min_surprise']}% แล้วถือ {c['hold']} วันทำการ "
+                 "(เข้าวันถัดจากวันประกาศ)"),
+        "hold_days": c["hold"], "min_surprise_pct": c["min_surprise"],
+        "events_used": c["n"], "events_total": len(evs),
+        "tuned_on": "ช่วง train เท่านั้น",
+        "source": "Yahoo Finance earnings dates",
+    }
+
+
+def _positions_insider(ticker, dates, rets, train_set, fee_pct):
+    data = events_data.insider_buys(ticker)
+    if not data.get("ok"):
+        return None, {"error": data.get("error") or "ไม่มีข้อมูล insider"}
+
+    evs = data["events"]
+    days_ = [e["day"] for e in evs]
+    grids = [{"hold": h, "events": days_, "n": len(days_)}
+             for h in INSIDER_HOLD_GRID]
+    best = _tune_on_train(dates, rets, train_set, evs, grids, fee_pct)
+    c = best["combo"]
+    return best["pos"], {
+        "rule": f"ผู้บริหารซื้อ แล้วถือ {c['hold']} วันทำการ (เข้าวันถัดไป)",
+        "hold_days": c["hold"], "events_used": c["n"],
+        "tuned_on": "ช่วง train เท่านั้น",
+        "source": "Yahoo Finance insider transactions",
+    }
 
 
 def _news_query(ticker: str) -> str:
@@ -286,6 +376,16 @@ def run(key: str, ticker: str, days: int = DEFAULT_DAYS, train_frac: float = 0.6
         pos, params = _positions_news_velocity(ticker, ret_days, set(train_days), days)
         if pos is None:
             return {"ok": False, "ticker": ticker, "error": params["error"]}
+    elif key == "pead":
+        pos, params = _positions_pead(ticker, ret_days, rets, set(train_days), fee_pct)
+        if pos is None:
+            return {"ok": False, "ticker": ticker, "error": params["error"],
+                    "strategy": {"key": key, **meta}}
+    elif key == "insider":
+        pos, params = _positions_insider(ticker, ret_days, rets, set(train_days), fee_pct)
+        if pos is None:
+            return {"ok": False, "ticker": ticker, "error": params["error"],
+                    "strategy": {"key": key, **meta}}
     else:
         return {"ok": False, "error": f"ยังไม่มีตัวรันของ '{key}'"}
 
