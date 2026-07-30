@@ -1034,6 +1034,10 @@ document.addEventListener('click', (e) => { const n = e.target.closest('[data-go
 window.addEventListener('hashchange', router);
 window.addEventListener('DOMContentLoaded', async () => {
   renderNav(); initStars(); initSearch(); initClock();
-  try { const d = await api('/defaults'); $('#aiModeBadge').textContent = 'AI: ' + d.ai_mode; } catch(e) {}
+  try {
+    const d = await api('/defaults');
+    const b = $('#aiModeBadge');
+    if (b) b.textContent = 'AI: ' + d.ai_mode;
+  } catch(e) {}
   router();
 });

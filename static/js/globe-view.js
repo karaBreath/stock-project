@@ -138,10 +138,12 @@ routes.globe = async (app) => {
   // ---- ธีม ----
   const themesRes = await api('/world/themes');
   const themes = themesRes.themes || [];
-  $('#themeChips').innerHTML =
+  // ทุกจุดที่เขียน DOM หลัง await ต้องผ่าน setHTML — ถ้าผู้ใช้เปลี่ยนหน้าไปแล้ว
+  // element จะหายไป การเขียนตรง ๆ จะพัง JS ทั้งหน้า (เจอจริงจาก console ของเบราว์เซอร์)
+  if (!setHTML('#themeChips',
     `<span class="chip active" data-theme="">ทั้งหมด</span>` +
     themes.map(t => `<span class="chip" data-theme="${t.key}">
-        <span class="dot" style="background:${t.color}"></span>${t.label}</span>`).join('');
+        <span class="dot" style="background:${t.color}"></span>${t.label}</span>`).join(''))) return;
 
   $$('.chip[data-theme]').forEach(c => c.onclick = () => {
     $$('.chip[data-theme]').forEach(x => x.classList.remove('active'));
@@ -154,8 +156,8 @@ routes.globe = async (app) => {
   // ---- tone signals ----
   api(`/world/signals?timespan=7d`).then(sig => {
     const rows = sig.rows || [];
-    if (!rows.length) { $('#signalBox').innerHTML = emptyState('📡', 'ยังดึงข้อมูล GDELT ไม่ได้'); return; }
-    $('#signalBox').innerHTML = rows.map(r => {
+    if (!rows.length) { setHTML('#signalBox', emptyState('📡', 'ยังดึงข้อมูล GDELT ไม่ได้')); return; }
+    setHTML('#signalBox', rows.map(r => {
       const dev = r.deviation;
       const c = dev === null || dev === undefined ? '' : (dev > 0 ? 'up' : 'down');
       return `<div class="stat-row">
@@ -164,7 +166,7 @@ routes.globe = async (app) => {
           <span class="small muted">(${dev === null || dev === undefined ? '—' : (dev > 0 ? '+' : '') + nf(dev, 2)})</span>
         </span>
       </div>`;
-    }).join('');
+    }).join(''));
   });
 
   // ---- points ----
@@ -237,7 +239,9 @@ routes.globe = async (app) => {
 
     if (!ok) { renderFallback(pts); return; }
 
+    // ensureGlobeLib() เป็น await — หน้าอาจเปลี่ยนไปแล้วตอนไลบรารีโหลดเสร็จ
     const box = $('#globeBox');
+    if (!box) return;
     if (!globe) {
       box.innerHTML = '';
       globe = Globe()(box)
@@ -366,28 +370,33 @@ routes.globe = async (app) => {
   }
 
   function showPointNews(d) {
-    $('#newsTitle').textContent = `ข่าวจาก ${d.name || 'จุดที่เลือก'}`;
+    const title = $('#newsTitle');
+    if (!title) return;
+    title.textContent = `ข่าวจาก ${d.name || 'จุดที่เลือก'}`;
     const arts = d.articles || [];
-    $('#worldNews').innerHTML = arts.length
+    setHTML('#worldNews', arts.length
       ? arts.map(a => `<div class="news-item"><a href="${a.url}" target="_blank" rel="noopener">${a.title}</a></div>`).join('')
-      : emptyState('📰', 'ไม่มีลิงก์ข่าวสำหรับจุดนี้');
+      : emptyState('📰', 'ไม่มีลิงก์ข่าวสำหรับจุดนี้'));
   }
 
   // ---- world news list ----
   async function loadNews() {
-    $('#worldNews').innerHTML = loader('');
+    setHTML('#worldNews', loader(''));
     const qs = activeTheme ? `theme=${activeTheme}&` : '';
     const res = await api(`/world/news?${qs}timespan=${timespan}&limit=15`);
     const items = res.items || [];
-    $('#newsTitle').textContent = activeTheme
+    // ผู้ใช้อาจเปลี่ยนหน้าไปแล้วระหว่างรอ — เขียนลง DOM ที่หายไปจะพังทั้งหน้า
+    const title = $('#newsTitle');
+    if (!title) return;
+    title.textContent = activeTheme
       ? `ข่าว: ${(themes.find(t => t.key === activeTheme) || {}).label || ''}`
       : 'ข่าวล่าสุดทั่วโลก';
-    $('#worldNews').innerHTML = items.length
+    setHTML('#worldNews', items.length
       ? items.map(a => `<div class="news-item">
           <a href="${a.link}" target="_blank" rel="noopener">${a.title}</a>
           <div class="small muted">${a.source || ''} ${a.country ? '· ' + a.country : ''}</div>
         </div>`).join('')
-      : emptyState('📰', 'ยังดึงข่าวไม่ได้');
+      : emptyState('📰', 'ยังดึงข่าวไม่ได้'));
   }
 
   loadPoints();
