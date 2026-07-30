@@ -31,6 +31,11 @@ jobs:
           python-version: "3.11"
 
       # -------------------------------------------------------------------
+      # ⚠️ เนื้อในของ step ที่ใช้ shell: powershell ต้องเป็น ASCII ล้วน
+      #    GitHub เขียนสคริปต์เป็นไฟล์ UTF-8 ไม่มี BOM แต่ PowerShell 5.1
+      #    อ่านไฟล์ .ps1 แบบ ANSI ข้อความไทยจะเพี้ยนเป็น à¸œà¹ˆà¸²à¸™
+      #    และไบต์ที่เพี้ยนบางตัวไปปิด string ก่อนกำหนด = syntax error ทั้ง step
+      #    (ชื่อ step ที่เป็นภาษาไทยไม่มีปัญหา เพราะไม่ได้ถูกรัน)
       - name: "1) setup.ps1 ต้อง parse ผ่าน (ไม่งั้นวางบรรทัดเดียวแล้วพังทันที)"
         shell: powershell
         run: |
@@ -39,21 +44,21 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile(
             "$PWD\setup.ps1", [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors -and $errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
-            throw "setup.ps1 มี syntax error $($errors.Count) จุด"
+            $errors | ForEach-Object { Write-Host "  line $($_.Extent.StartLineNumber): $($_.Message)" }
+            throw "setup.ps1 has $($errors.Count) syntax error(s)"
           }
-          Write-Host "  setup.ps1 parse ผ่าน · $($tokens.Count) tokens"
+          Write-Host "  setup.ps1 parses OK - $($tokens.Count) tokens"
 
       - name: "2) gui.bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
         shell: powershell
         run: |
           $bytes = [IO.File]::ReadAllBytes("$PWD\gui.bat")
-          if ($bytes | Where-Object { $_ -gt 127 }) { throw "gui.bat มีอักขระที่ไม่ใช่ ASCII" }
+          if ($bytes | Where-Object { $_ -gt 127 }) { throw "gui.bat contains non-ASCII bytes" }
           $text = [IO.File]::ReadAllText("$PWD\gui.bat")
           $crlf = ([regex]::Matches($text, "`r`n")).Count
           $lf   = ([regex]::Matches($text, "`n")).Count
-          if ($crlf -ne $lf) { throw "gui.bat มีบรรทัดที่ไม่ได้จบด้วย CRLF" }
-          Write-Host "  gui.bat ผ่าน · $crlf บรรทัด CRLF"
+          if ($crlf -ne $lf) { throw "gui.bat has lines not ending in CRLF" }
+          Write-Host "  gui.bat OK - $crlf CRLF lines"
 
       # -------------------------------------------------------------------
       - name: "3) สร้างไอคอนบนหน้าจอจริง แล้วต้องมีไฟล์ .lnk โผล่จริง"
@@ -61,22 +66,23 @@ jobs:
         run: |
           python services\desktop.py
           $desk = [Environment]::GetFolderPath('Desktop')
-          Write-Host "  หน้าจออยู่ที่: $desk"
+          Write-Host "  Desktop is at: $desk"
           $lnk = Get-ChildItem $desk -Filter *.lnk -ErrorAction SilentlyContinue
-          $lnk | ForEach-Object { Write-Host "  เจอ: $($_.Name) ($($_.Length) bytes)" }
-          if (-not $lnk) { throw "ไม่มีไฟล์ .lnk บนหน้าจอ = ผู้ใช้จะไม่มีอะไรให้กด" }
+          $lnk | ForEach-Object { Write-Host "  found: $($_.Name) ($($_.Length) bytes)" }
+          if (-not $lnk) { throw "No .lnk on the desktop - the user would have nothing to click" }
 
-          # ทางลัดต้องชี้ไปที่ gui.py จริง ๆ ไม่ใช่สร้างไฟล์เปล่า ๆ ไว้หลอกตา
+          # The shortcut must really point at gui.py, not just be an empty file
+          # sitting there looking convincing.
           $sh = New-Object -ComObject WScript.Shell
           $s = $sh.CreateShortcut($lnk[0].FullName)
           Write-Host "  TargetPath  : $($s.TargetPath)"
           Write-Host "  Arguments   : $($s.Arguments)"
           Write-Host "  IconLocation: $($s.IconLocation)"
-          if ($s.Arguments -notlike "*gui.py*") { throw "ทางลัดไม่ได้ชี้ไปที่ gui.py" }
-          if (-not (Test-Path $s.TargetPath))   { throw "ตัวรันที่ทางลัดชี้ไปไม่มีอยู่จริง" }
+          if ($s.Arguments -notlike "*gui.py*") { throw "Shortcut does not point at gui.py" }
+          if (-not (Test-Path $s.TargetPath))   { throw "Shortcut target does not exist" }
           $icon = ($s.IconLocation -split ',')[0]
-          if (-not (Test-Path $icon)) { throw "ไฟล์ไอคอนไม่มีอยู่จริง" }
-          Write-Host "  ทางลัดถูกต้องครบทุกช่อง"
+          if (-not (Test-Path $icon)) { throw "Icon file does not exist" }
+          Write-Host "  Shortcut is valid in every field"
 
       # -------------------------------------------------------------------
       - name: "4) หน้าต่างโปรแกรมต้องเปิดขึ้นจริงบน Windows"

@@ -117,6 +117,48 @@ def test_desktop_cli_prints_ascii_only(monkeypatch, capsys):
     out.encode("ascii")   # จะโยน UnicodeEncodeError ถ้ามีอักษรไทยหลุด
 
 
+def test_no_thai_inside_powershell_workflow_steps():
+    """
+    เคยพลาดมาแล้วจริง ๆ: GitHub เขียน step เป็นไฟล์ .ps1 แบบ UTF-8 ไม่มี BOM
+    แต่ PowerShell 5.1 อ่านไฟล์ .ps1 เป็น ANSI ข้อความไทยเลยเพี้ยน
+    และไบต์ที่เพี้ยนบางตัวไปปิด string ก่อนกำหนด = ทั้ง step พังด้วย syntax error
+
+    ชื่อ step (name:) เป็นไทยได้ เพราะไม่ได้ถูกรัน — ห้ามเฉพาะใน run:
+    """
+    wf_dir = os.path.join(BASE, ".github", "workflows")
+    problems = []
+
+    for fn in sorted(os.listdir(wf_dir)):
+        if not fn.endswith((".yml", ".yaml")):
+            continue
+        with open(os.path.join(wf_dir, fn), encoding="utf-8") as f:
+            lines = f.readlines()
+
+        in_ps_run = False
+        run_indent = 0
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("shell:"):
+                # ตัดคอมเมนต์ท้ายบรรทัดออกก่อน ไม่งั้นคำว่า powershell
+                # ที่อยู่ในคอมเมนต์ของ step ที่ใช้ bash จะถูกนับผิด
+                value = stripped.split(":", 1)[1].split("#")[0].strip()
+                in_ps_run = value in ("powershell", "pwsh")
+                continue
+            if in_ps_run and stripped.startswith("run:"):
+                run_indent = len(line) - len(line.lstrip())
+                continue
+            if run_indent:
+                indent = len(line) - len(line.lstrip())
+                if stripped and indent <= run_indent:
+                    run_indent, in_ps_run = 0, False
+                elif any(ord(c) > 127 for c in line):
+                    problems.append(f"{fn}:{i}: {stripped[:60]}")
+
+    assert not problems, (
+        "มีอักขระที่ไม่ใช่ ASCII ในเนื้อ step ของ PowerShell:\n  "
+        + "\n  ".join(problems))
+
+
 def test_one_line_command_in_the_guide_matches_this_file():
     """
     ถ้าลิงก์ในคู่มือกับชื่อไฟล์จริงไม่ตรงกัน ผู้ใช้จะได้ 404
