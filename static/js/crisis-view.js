@@ -1,0 +1,238 @@
+/* ============================================================
+   crisis-view.js — บทเรียนจากวิกฤต + สัญญาณเตือนล่วงหน้า
+   ============================================================ */
+
+routes.crisis = async (app, ticker) => {
+  app.innerHTML = `
+    <div class="view active">
+      <div class="page-title">บทเรียนจากวิกฤต ⚠️</div>
+      <div class="page-sub">วิกฤตแต่ละแบบทำให้หุ้นร่วงแค่ไหน · ก่อนเกิดมีสัญญาณอะไรเตือน · วันนี้เราอยู่ตรงไหน</div>
+
+      <div class="card" style="margin-bottom:14px;border-color:var(--down)">
+        <div class="card-title">อ่านก่อนใช้</div>
+        <div class="small" style="line-height:1.7">
+          · วิกฤตใน 25 ปีมีแค่ <b>8 ครั้ง</b> — ตัวอย่างน้อยมาก สรุปเป็นกฎเหล็กไม่ได้<br>
+          · สัญญาณพวกนี้ <b>เคยเตือนถูกบ้างผิดบ้าง</b> และเคยเตือนหลายครั้งที่ไม่เกิดวิกฤตจริง<br>
+          · ทุกวิกฤตสาเหตุไม่เหมือนกัน สิ่งที่เคยเตือนได้ครั้งก่อนอาจเงียบครั้งหน้า<br>
+          · ข่าว GDELT ย้อนหลังได้ถึงราวปี 2017 เท่านั้น หน้านี้จึงใช้ <b>ราคา + ตัวชี้วัดมหภาค</b> ซึ่งย้อนได้ถึงปี 1990s
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-title">หุ้น/กองทุนของคุณเจอวิกฤตแล้วเป็นยังไง</div>
+        <div class="form-grid">
+          <div>
+            <label class="small muted">สัญลักษณ์</label>
+            <input id="crTicker" type="text" placeholder="เช่น AAPL, SPY, QQQ, PTT.BK" value="${ticker || ''}" />
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn" id="crRun">ดูผลกระทบ</button>
+          </div>
+        </div>
+        <div class="chips" style="margin-top:10px" id="crQuick"></div>
+      </div>
+
+      <div id="crImpact"></div>
+
+      <div class="card">
+        <div class="card-title">สัญญาณเตือนล่วงหน้า — วันนี้เทียบกับก่อนวิกฤตในอดีต</div>
+        <div id="crSignals">${loader('')}</div>
+      </div>
+    </div>`;
+
+  $('#crQuick').innerHTML = ['SPY', 'QQQ', 'VOO', 'AAPL', 'NVDA', 'XLF']
+    .map(t => `<span class="chip" data-t="${t}">${t}</span>`).join('');
+  $$('#crQuick .chip').forEach(c => c.onclick = () => {
+    $('#crTicker').value = c.dataset.t; runImpact();
+  });
+
+  $('#crRun').onclick = runImpact;
+  $('#crTicker').onkeydown = e => { if (e.key === 'Enter') runImpact(); };
+
+  loadSignals();
+  if (ticker) runImpact();
+
+  // ---------- ผลกระทบต่อหุ้นที่เลือก ----------
+  async function runImpact() {
+    const t = ($('#crTicker').value || '').trim().toUpperCase();
+    if (!t) { toast('ใส่สัญลักษณ์ก่อน'); return; }
+    $('#crImpact').innerHTML = `<div class="card">${loader('กำลังดึงราคาย้อนหลัง 20+ ปี…')}</div>`;
+
+    const r = await api(`/crisis/impact/${encodeURIComponent(t)}`);
+    if (!r.ok) {
+      $('#crImpact').innerHTML = `<div class="card">${emptyState('⚠️', r.error || 'ดึงข้อมูลไม่ได้')}</div>`;
+      return;
+    }
+
+    const rows = (r.crises || []).map(c => {
+      if (!c.covered) {
+        return `<tr style="opacity:.4">
+          <td>${c.name}<div class="small muted">${c.cause}</div></td>
+          <td colspan="4" class="small muted">${c.note_extra || 'ไม่มีข้อมูล'}</td></tr>`;
+      }
+      const rec = c.recovery_months ? `${c.recovery_months} เดือน`
+        : '<span class="down">ยังไม่ฟื้น</span>';
+      const vs = c.vs_market === null || c.vs_market === undefined ? '—'
+        : `<span class="${cls(c.vs_market)}">${c.vs_market > 0 ? '+' : ''}${nf(c.vs_market, 1)}%</span>`;
+      return `<tr>
+        <td>${c.name}<div class="small muted">${c.cause} · ${c.start}</div></td>
+        <td class="mono down" style="font-weight:600">${nf(c.drawdown_pct, 1)}%</td>
+        <td class="mono">${nf(c.benchmark_drawdown_pct, 1)}%</td>
+        <td>${vs}</td>
+        <td>${rec}</td>
+      </tr>`;
+    }).join('');
+
+    $('#crImpact').innerHTML = `
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-title">${r.ticker} เจอวิกฤตมาแล้ว</div>
+        <div style="font-weight:600;line-height:1.6;margin-bottom:10px">${r.summary || ''}</div>
+        <div class="small muted" style="margin-bottom:10px">
+          มีข้อมูลราคาตั้งแต่ ${r.data_from} · เทียบกับ S&P 500
+        </div>
+        <div class="table-scroll"><table class="tbl">
+          <thead><tr>
+            <th>วิกฤต</th><th>${r.ticker} ร่วง</th><th>ตลาดร่วง</th><th>ต่างจากตลาด</th><th>ฟื้นใน</th>
+          </tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="small muted" style="margin-top:10px">
+          "ต่างจากตลาด" ติดลบ = ร่วงแรงกว่าตลาด · ตัวเลขนี้บอกว่าหุ้นตัวนี้ทนวิกฤตได้แค่ไหน
+        </div>
+      </div>`;
+  }
+
+  // ---------- สัญญาณเตือนล่วงหน้า ----------
+  async function loadSignals() {
+    const r = await api('/crisis/signals');
+    const rows = (r.rows || []);
+    if (!rows.length) { $('#crSignals').innerHTML = emptyState('📡', 'ดึงข้อมูลไม่ได้'); return; }
+
+    const lvlCol = { high: 'var(--down)', medium: 'var(--neon-purple)', low: 'var(--up)' };
+
+    $('#crSignals').innerHTML = rows.map(s => {
+      if (!s.ok) {
+        return `<div class="card" style="margin-bottom:10px;opacity:.5">
+          <b>${s.label}</b><div class="small muted">${s.error || 'ดึงข้อมูลไม่ได้'}</div></div>`;
+      }
+      const col = lvlCol[s.danger?.level] || 'var(--muted)';
+      const hist = (s.before_crises || []).map(h => `<tr>
+          <td class="small">${h.crisis}<div class="muted" style="font-size:11px">${h.cause}</div></td>
+          <td class="mono">${nf(h.d180, 2)}</td>
+          <td class="mono">${nf(h.d90, 2)}</td>
+          <td class="mono">${nf(h.d30, 2)}</td>
+          <td class="mono">${nf(h.at_start, 2)}</td>
+        </tr>`).join('');
+
+      return `<div class="card" style="margin-bottom:12px;border-color:${col}">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline">
+          <b>${s.label}</b>
+          <span style="color:${col};font-weight:600">
+            ตอนนี้ ${nf(s.current, 2)} · ${s.danger?.text || ''}
+          </span>
+        </div>
+        <div class="small muted" style="margin:6px 0">${s.hint} · ข้อมูลตั้งแต่ ${s.data_from}
+          ${s.percentile !== null && s.percentile !== undefined
+            ? ` · ค่าปัจจุบันสูงกว่า ${nf(s.percentile, 0)}% ของประวัติทั้งหมด` : ''}</div>
+        ${hist ? `<div class="table-scroll"><table class="tbl">
+          <thead><tr><th>ก่อนวิกฤต</th><th>180 วัน</th><th>90 วัน</th><th>30 วัน</th><th>วันที่เริ่ม</th></tr></thead>
+          <tbody>${hist}</tbody></table></div>` : '<div class="small muted">ไม่มีข้อมูลย้อนหลังพอ</div>'}
+      </div>`;
+    }).join('') + `<div class="small muted" style="margin-top:8px">⚠️ ${r.caveat || ''}</div>`;
+  }
+};
+
+/* ============================================================
+   VIEW: ตรวจระบบ — เช็คว่าแหล่งข้อมูลภายนอกใช้งานได้จริงไหม
+   ============================================================ */
+routes.selfcheck = async (app) => {
+  app.innerHTML = `
+    <div class="view active">
+      <div class="page-title">ตรวจระบบ 🩺</div>
+      <div class="page-sub">ยิงทดสอบทุกแหล่งข้อมูลจริง แล้วบอกว่าอะไรใช้ได้ อะไรพัง และพังเพราะอะไร</div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" id="scRun">เริ่มตรวจ</button>
+          <button class="btn ghost" id="scCopy" disabled>คัดลอกผลเป็นข้อความ</button>
+          <span class="small muted">ใช้เวลาราว 10-60 วินาที (ยิงเน็ตจริงทุกแหล่ง)</span>
+        </div>
+      </div>
+
+      <div id="scBody"></div>
+    </div>`;
+
+  let lastText = '';
+
+  $('#scRun').onclick = runCheck;
+  $('#scCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(lastText); toast('คัดลอกแล้ว'); }
+    catch (e) { toast('คัดลอกไม่ได้ — เลือกข้อความในกล่องด้านล่างแทน'); }
+  };
+
+  runCheck();
+
+  async function runCheck() {
+    // การตรวจใช้เวลาเป็นนาที ผู้ใช้อาจเปลี่ยนหน้าไปก่อน — DOM เดิมจะหายไปแล้ว
+    // จึงต้องเช็คทุกครั้งก่อนแตะ ไม่งั้นจะพังตอนกลับมา
+    const setDisabled = (sel, v) => { const el = $(sel); if (el) el.disabled = v; };
+    const setHTML = (sel, html) => { const el = $(sel); if (el) el.innerHTML = html; };
+
+    setDisabled('#scRun', true);
+    setHTML('#scBody', `<div class="card">${loader('กำลังยิงทดสอบทุกแหล่งข้อมูล…')}</div>`);
+    const r = await api('/selfcheck');
+    if (!$('#scBody')) return;              // เปลี่ยนหน้าไปแล้ว ไม่ต้องวาดต่อ
+    setDisabled('#scRun', false);
+    if (!r || !r.checks) {
+      setHTML('#scBody', `<div class="card">${emptyState('⚠️', 'ตรวจไม่สำเร็จ')}</div>`);
+      return;
+    }
+
+    const col = r.ok ? 'var(--up)' : 'var(--down)';
+    const byGroup = {};
+    r.checks.forEach(c => (byGroup[c.group] = byGroup[c.group] || []).push(c));
+
+    lastText = r.checks.map(c =>
+      `[${c.ok ? 'OK  ' : (c.skipped ? 'SKIP' : 'FAIL')}] ${c.group}/${c.name} (${c.ms}ms) — ${c.detail}`
+      + (c.error ? ` | ${c.error}` : '')).join('\n');
+    setDisabled('#scCopy', false);
+
+    setHTML('#scBody', `
+      <div class="card" style="margin-bottom:14px;border-color:${col}">
+        <div class="card-title">ผลตรวจ</div>
+        <div style="color:${col};font-weight:600;font-size:16px">${r.verdict}</div>
+        <div class="small muted" style="margin-top:6px">
+          ผ่าน ${r.passed}/${r.total} · ตรวจเมื่อ ${r.checked_at}
+        </div>
+        ${r.failed_names && r.failed_names.length
+          ? `<div class="small" style="margin-top:8px">ที่ใช้ไม่ได้: <b>${r.failed_names.join(' · ')}</b></div>`
+          : ''}
+        ${r.skipped_names && r.skipped_names.length
+          ? `<div class="small muted" style="margin-top:6px">⏭️ ข้ามชั่วคราว (โดนจำกัดอัตราการเรียก ไม่ใช่ของพัง):
+             <b>${r.skipped_names.join(' · ')}</b></div>`
+          : ''}
+      </div>
+
+      ${Object.entries(byGroup).map(([g, list]) => `
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-title">${g}
+            <span class="small muted">(${list.filter(c => c.ok).length}/${list.length})</span></div>
+          <div class="table-scroll"><table class="tbl">
+            <thead><tr><th>รายการ</th><th>ผล</th><th>เวลา</th><th>รายละเอียด</th></tr></thead>
+            <tbody>${list.map(c => `<tr style="${c.ok ? '' : (c.skipped ? 'opacity:.65' : 'background:rgba(255,77,109,.07)')}">
+              <td>${c.name}<div class="small muted">${c.hint || ''}</div></td>
+              <td>${c.ok ? '<span class="up">✅ ผ่าน</span>'
+                    : (c.skipped ? '<span class="muted">⏭️ ข้ามชั่วคราว</span>'
+                                 : '<span class="down">❌ ไม่ผ่าน</span>')}</td>
+              <td class="mono small">${c.ms}ms</td>
+              <td class="small">${c.detail || ''}
+                ${c.error ? `<div class="down small mono" style="margin-top:4px">${c.error}</div>` : ''}</td>
+            </tr>`).join('')}</tbody></table></div>
+        </div>`).join('')}
+
+      <div class="card">
+        <div class="card-title">ผลแบบข้อความ (ส่งต่อให้คนช่วยดูได้)</div>
+        <textarea readonly rows="10" style="width:100%;background:rgba(0,0,0,.35);color:var(--text);
+          border:1px solid var(--stroke);border-radius:var(--radius-sm);padding:10px;
+          font-family:monospace;font-size:12px">${lastText}</textarea>
+      </div>`);
+  }
+};

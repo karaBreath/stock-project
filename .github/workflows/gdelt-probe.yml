@@ -1,0 +1,82 @@
+# วัดว่า GDELT ปฏิเสธเพราะอะไร และ curl กับ python-requests ถูกปฏิบัติต่างกันไหม
+# (โค้ดจริงใช้ requests แต่ตอนวัดครั้งก่อนใช้ curl — ต้องรู้ว่าต่างกันจริงหรือไม่)
+name: gdelt-probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/gdelt-probe.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q requests
+      - name: curl vs requests สลับกัน + พิมพ์ body ที่ GDELT ตอบกลับ
+        run: |
+          python - <<'PY'
+          import subprocess, time, requests
+
+          UA = "NEBULA-Stock-App/1.0 (educational stock research)"
+          B = "https://api.gdeltproject.org/api/v2/doc/doc"
+          WORDS = ["economy", "market", "energy", "inflation", "oil", "chip"]
+
+          def url_for(w):
+              return (f"{B}?query={w}&mode=ArtList&format=json"
+                      f"&maxrecords=50&timespan=24h")
+
+          def show(tag, code, body, secs):
+              n = body.count('"url"')
+              head = " ".join(body[:220].split())
+              print(f"{tag:<34} HTTP={code} {secs:>5.1f}s ข่าว={n}")
+              if code != 200:
+                  print(f"    body: {head}")
+
+          def by_curl(w):
+              t0 = time.time()
+              p = subprocess.run(
+                  ["curl", "-sS", "-m", "45", "-A", UA,
+                   "-w", "\n__CODE__%{http_code}", url_for(w)],
+                  capture_output=True, text=True)
+              out = p.stdout
+              code = out.rsplit("__CODE__", 1)[-1].strip() if "__CODE__" in out else "ERR"
+              body = out.rsplit("\n__CODE__", 1)[0]
+              show(f"curl     {w}", code, body, time.time() - t0)
+
+          def by_requests(w, minimal=False):
+              t0 = time.time()
+              h = {"User-Agent": UA}
+              if minimal:
+                  h["Accept-Encoding"] = "identity"
+                  h["Accept"] = "*/*"
+              try:
+                  r = requests.get(url_for(w), headers=h, timeout=45)
+                  tag = f"requests{'*' if minimal else ' '} {w}"
+                  show(tag, r.status_code, r.text, time.time() - t0)
+              except Exception as e:
+                  print(f"requests {w}: EXC {type(e).__name__} {e}")
+
+          print("===== สลับ curl / requests ด้วย URL เดียวกันเป๊ะ (ห่าง 8 วิ) =====")
+          for w in WORDS:
+              by_curl(w)
+              time.sleep(8)
+              by_requests(w)
+              time.sleep(8)
+
+          print()
+          print("===== requests แบบตัดหัวข้อ Accept-Encoding ให้เหมือน curl =====")
+          for w in ["economy", "market"]:
+              by_requests(w, minimal=True)
+              time.sleep(8)
+
+          print()
+          print("===== ยิงรัว ๆ ห่าง 2 วิ เพื่อดูว่าอัตราการยิงคือสาเหตุไหม =====")
+          for w in WORDS:
+              by_requests(w)
+              time.sleep(2)
+          PY

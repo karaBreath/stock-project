@@ -130,8 +130,34 @@ def get_quote(ticker: str) -> dict:
     except Exception as e:  # network / parse error
         result["error"] = str(e)
 
+    # แผนสำรอง: Yahoo ชอบบล็อก endpoint แบบ quote จาก IP ของ cloud เป็นพัก ๆ
+    # แต่ endpoint แบบ history (กราฟ) มักยังใช้ได้ -> เอาราคาปิด 2 วันล่าสุดมาแทน
+    # (ได้ราคา/การเปลี่ยนแปลง แต่ไม่มีข้อมูลงบการเงิน จนกว่า quote จะกลับมา)
+    if not result.get("ok"):
+        try:
+            h = get_history(ticker, period="5d")
+            closes = [c["close"] for c in h.get("candles", []) if c.get("close") is not None]
+            if closes:
+                price = float(closes[-1])
+                prev = float(closes[-2]) if len(closes) >= 2 else None
+                change = (price - prev) if prev is not None else None
+                result.update({
+                    "ok": True,
+                    "name": result.get("name") or ticker,
+                    "price": _safe(price),
+                    "previous_close": _safe(prev),
+                    "change": _safe(change),
+                    "change_pct": _safe(change / prev * 100) if (change is not None and prev) else None,
+                    "source": "history-fallback",
+                })
+                result.pop("error", None)
+        except Exception:
+            pass
+
     if result.get("ok"):
-        cache_set(cache_key, result, Config.QUOTE_CACHE_TTL)
+        # ราคาจาก fallback แม่นเรื่องแนวโน้มแต่ช้ากว่า realtime -> cache สั้นลง
+        ttl = Config.QUOTE_CACHE_TTL if result.get("source") != "history-fallback" else 60
+        cache_set(cache_key, result, ttl)
     return result
 
 

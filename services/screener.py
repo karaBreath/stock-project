@@ -43,13 +43,14 @@ def _fetch_one(ticker):
         return {"ok": False, "ticker": ticker}
 
 
-def screen(filters: dict, market="th") -> dict:
+def screen(filters: dict, market="us") -> dict:
     # ใช้ universe ที่ระบุหรือ universe เต็ม
     tickers = filters.get("tickers") or get_universe(market)
 
     results = []
-    # ดึงข้อมูลแบบ parallel (20 threads พร้อมกัน)
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    # ดึงข้อมูลแบบ parallel — 10 threads พอ: ยิงแรงกว่านี้จากเซิร์ฟเวอร์ cloud
+    # โดน Yahoo rate-limit แล้วผลลัพธ์หายเป็นแถบ (ช้าลงนิดแต่ได้ครบกว่า)
+    with ThreadPoolExecutor(max_workers=10) as ex:
         future_map = {ex.submit(_fetch_one, t): t for t in tickers}
         for future in as_completed(future_map):
             q = future.result()

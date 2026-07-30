@@ -1,0 +1,54 @@
+# ตรวจเว็บที่ deploy จริงหลังทุก push — รอให้เว็บตื่น แล้วยิง selfcheck เต็มชุด
+# ผลอ่านได้จาก log ของ workflow นี้ (ไม่ทำให้ CI แดงแม้เว็บจะยังไม่พร้อม)
+name: site-check
+
+on:
+  push:
+    branches: ["claude/stock-trading-project-zjrrcz"]
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Base URL ของเว็บที่ deploy"
+        required: false
+        default: "https://mr-arm-stock.onrender.com"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Probe deployed site
+        run: |
+          BASE="${{ github.event.inputs.url }}"
+          BASE="${BASE:-https://mr-arm-stock.onrender.com}"
+          echo "== รอเว็บตื่น: $BASE/health (Render ฟรีหลับเมื่อไม่มีคนใช้ + อาจกำลัง build) =="
+          up=0
+          for i in $(seq 1 24); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 60 "$BASE/health" || true)
+            echo "ครั้งที่ $i: HTTP $code"
+            if [ "$code" = "200" ]; then up=1; break; fi
+            sleep 15
+          done
+          if [ "$up" != "1" ]; then
+            echo "!! เว็บไม่ตอบภายใน ~6 นาที — อาจ URL ไม่ตรงหรือ deploy ล้ม"
+            exit 0
+          fi
+
+          echo
+          echo "== เมนูที่ควรมีครบ =="
+          curl -s -m 60 "$BASE/" | grep -o "data-go=\"[a-z0-9]*\"" | sort -u | tr '\n' ' '
+          echo
+
+          echo
+          echo "== ความรู้ที่เครื่องเรียนได้แล้ว (ควร > 0 หลังบูตสักพัก) =="
+          curl -s -m 90 "$BASE/api/learn/status" || true
+          echo
+
+          echo
+          echo "== สะพานเชื่อมระบบเทรด MT5 =="
+          curl -s -m 60 "$BASE/api/ve/status" || true
+          echo
+
+          echo
+          echo "== SELFCHECK เต็มชุด (ใช้เวลาราว 1 นาที) =="
+          curl -s -m 300 "$BASE/api/selfcheck?format=text" || echo "selfcheck ยิงไม่สำเร็จ"

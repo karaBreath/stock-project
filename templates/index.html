@@ -6,6 +6,14 @@
   <meta name="theme-color" content="#050510" />
   <title>Mr.ARM · STOCK SEEKER</title>
 
+  <!-- PWA: ติดตั้งเป็นแอปบนหน้าจอได้ (Add to Home Screen) -->
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}" />
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Mr.ARM" />
+
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
@@ -60,5 +68,15 @@
   <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('static', filename='js/chart-view.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/globe-view.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/crisis-view.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/lab-view.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ve-view.js') }}"></script>
+  <script>
+    // ลงทะเบียน service worker (ให้เปิดแอปตอนออฟไลน์แล้วยังเห็นหน้าเดิม)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>

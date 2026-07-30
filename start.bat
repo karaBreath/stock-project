@@ -1,23 +1,35 @@
 @echo off
-REM ============================================================
-REM  NEBULA Stock Analysis - ตัวช่วยรันบน Windows
-REM  สร้าง venv (ครั้งแรก) + ติดตั้ง dependencies + รันแอป
-REM ============================================================
+REM NEBULA launcher. ASCII only on purpose: Thai text + chcp inside a .bat
+REM can make cmd.exe lose its place in the file and exit silently.
+setlocal
 cd /d "%~dp0"
 title NEBULA Stock Analysis
 
-if not exist "venv\" (
-  echo [1/3] กำลังสร้าง virtual environment ...
-  python -m venv venv
+set "PY="
+py -3 --version >nul 2>nul && set "PY=py -3"
+if not defined PY python --version >nul 2>nul && set "PY=python"
+if not defined PY python3 --version >nul 2>nul && set "PY=python3"
+
+if not defined PY (
+  echo.
+  echo   [!] Python not found on this PC.
+  echo.
+  echo   Install it from https://www.python.org/downloads/
+  echo   IMPORTANT: tick "Add python.exe to PATH" during setup,
+  echo   then close this window and run start.bat again.
+  echo.
+  pause
+  exit /b 1
 )
 
-echo [2/3] กำลังติดตั้ง/ตรวจสอบ dependencies ...
-call venv\Scripts\activate.bat
-python -m pip install --upgrade pip >nul
-pip install -r requirements.txt
+%PY% "%~dp0launcher.py" %*
+set "RC=%ERRORLEVEL%"
 
-echo [3/3] กำลังเปิดแอป ที่ http://127.0.0.1:5000
-echo.
-python app.py
-
-pause
+if not "%RC%"=="0" (
+  echo.
+  echo   [!] Launcher exited with code %RC%
+  echo       Screenshot this window if you need help.
+  echo.
+  pause
+)
+endlocal

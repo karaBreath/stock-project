@@ -50,32 +50,70 @@ def _label(score: int) -> str:
     return "neutral"
 
 
-def get_news(query: str = "", ticker: str = "", limit: int = 20) -> dict:
+# Google News locale — (hl, gl, ceid)
+LOCALE_TH = ("th", "TH", "TH:th")
+LOCALE_EN = ("en-US", "US", "US:en")
+
+
+def _locales_for(ticker: str, lang: str = "auto"):
+    """
+    เลือกภาษาข่าวให้เหมาะกับสิ่งที่ถือ
+      - หุ้นไทย (.BK) -> ข่าวไทย + ข่าวอังกฤษ (หุ้นไทยก็โดนข่าวโลกกระทบ)
+      - หุ้น/กองทุนสหรัฐ และอื่น ๆ -> ข่าวอังกฤษ (ทั่วโลก)
+      - ไม่ระบุ ticker -> เอาทั้งสองภาษา
+    บังคับได้ด้วย lang='th' | 'en' | 'both'
+    """
+    if lang == "th":
+        return [LOCALE_TH]
+    if lang == "en":
+        return [LOCALE_EN]
+    if lang == "both":
+        return [LOCALE_TH, LOCALE_EN]
+
+    t = (ticker or "").upper()
+    if t.endswith(".BK"):
+        return [LOCALE_TH, LOCALE_EN]
+    if t:
+        return [LOCALE_EN]          # AAPL, SPY, VOO, QQQ ... -> ข่าวอังกฤษ
+    return [LOCALE_TH, LOCALE_EN]
+
+
+def get_news(query: str = "", ticker: str = "", limit: int = 20, lang: str = "auto") -> dict:
     key_q = query or ticker or "หุ้น stock market"
-    cache_key = f"news:{key_q}:{limit}"
+    locales = _locales_for(ticker, lang)
+    cache_key = f"news:{key_q}:{limit}:{'+'.join(l[2] for l in locales)}"
     cached = cache_get(cache_key)
     if cached:
         return cached
 
     items = []
+    seen = set()
 
-    # ---- 1) Google News RSS ----
+    # ---- 1) Google News RSS (ดึงตามภาษาที่เหมาะกับหุ้นตัวนั้น) ----
     if _FP_OK:
-        try:
-            q = urllib.parse.quote(key_q)
-            url = f"https://news.google.com/rss/search?q={q}&hl=th&gl=TH&ceid=TH:th"
-            feed = feedparser.parse(url)
-            for e in feed.entries[:limit]:
-                title = e.get("title", "")
-                items.append({
-                    "title": title,
-                    "link": e.get("link"),
-                    "source": (e.get("source", {}) or {}).get("title") if isinstance(e.get("source"), dict) else "Google News",
-                    "published": e.get("published", ""),
-                    "sentiment": _label(_score_text(title)),
-                })
-        except Exception:
-            pass
+        per_locale = max(1, limit // len(locales))
+        for hl, gl, ceid in locales:
+            try:
+                q = urllib.parse.quote(key_q)
+                url = (f"https://news.google.com/rss/search?q={q}"
+                       f"&hl={hl}&gl={gl}&ceid={urllib.parse.quote(ceid)}")
+                feed = feedparser.parse(url)
+                for e in feed.entries[:per_locale]:
+                    title = e.get("title", "")
+                    if not title or title in seen:
+                        continue
+                    seen.add(title)
+                    src = e.get("source")
+                    items.append({
+                        "title": title,
+                        "link": e.get("link"),
+                        "source": (src or {}).get("title") if isinstance(src, dict) else "Google News",
+                        "published": e.get("published", ""),
+                        "lang": hl,
+                        "sentiment": _label(_score_text(title)),
+                    })
+            except Exception:
+                continue
 
     # ---- 2) Yahoo Finance news (ถ้าระบุ ticker) ----
     if ticker and _YF_OK and len(items) < limit:
@@ -90,6 +128,7 @@ def get_news(query: str = "", ticker: str = "", limit: int = 20) -> dict:
                     "link": link,
                     "source": (content.get("provider", {}) or {}).get("displayName", "Yahoo Finance"),
                     "published": content.get("pubDate", ""),
+                    "lang": "en-US",
                     "sentiment": _label(_score_text(title)),
                 })
         except Exception:
@@ -106,6 +145,7 @@ def get_news(query: str = "", ticker: str = "", limit: int = 20) -> dict:
     result = {
         "query": key_q,
         "items": items[:limit],
+        "locales": [l[2] for l in locales],
         "summary": {"positive": pos, "negative": neg, "neutral": len(items) - pos - neg},
         "fetched_at": dt.datetime.now().isoformat(timespec="seconds"),
     }

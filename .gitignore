@@ -20,6 +20,8 @@ data/*.sqlite
 # Environment variables / secrets
 .env
 .env.*
+# ยกเว้นไฟล์ตัวอย่าง (ไม่มีความลับ) — ต้อง commit ไม่งั้น launcher สร้าง .env ให้ไม่ได้
+!.env.example
 *.key
 
 # OS
@@ -36,3 +38,6 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# pytest
+.pytest_cache/

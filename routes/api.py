@@ -11,7 +11,8 @@ from database import query, execute
 from services import (
     stock_data, technical, fundamental, news, sentiment as sentiment_svc,
     macro, scoring, screener, portfolio, risk, backtest, institutional,
-    alerts, daily_report, ai_advisory,
+    alerts, daily_report, ai_advisory, gdelt, correlation, news_backtest, crisis,
+    selfcheck, volume_profile, strategy_lab, volume_edge,
 )
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -54,7 +55,7 @@ def search():
 @api.post("/screener")
 def screen():
     a = _args()
-    market = a.pop("market", "th")
+    market = a.pop("market", "us")
     return jsonify(screener.screen(a, market=market))
 
 
@@ -88,9 +89,11 @@ def fear_greed():
 
 @api.get("/news")
 def news_ep():
+    # lang: auto (เลือกตามหุ้น) | th | en | both
     return jsonify(news.get_news(query=request.args.get("q", ""),
                                  ticker=request.args.get("ticker", ""),
-                                 limit=int(request.args.get("limit", 20))))
+                                 limit=int(request.args.get("limit", 20)),
+                                 lang=request.args.get("lang", "auto")))
 
 
 # ---------------- 5) Institutional / insider ----------------
@@ -102,19 +105,19 @@ def institutional_ep(ticker):
 # ---------------- 6) Macro ----------------
 @api.get("/macro")
 def macro_ep():
-    return jsonify(macro.get_macro())
+    return jsonify(macro.get_macro(request.args.get("market", "")))
 
 
 # ---------------- 7) Sector ----------------
 @api.get("/sectors")
 def sectors_ep():
-    return jsonify(macro.sector_performance(request.args.get("market", "th")))
+    return jsonify(macro.sector_performance(request.args.get("market", "us")))
 
 
 # ---------------- 8) Daily report ----------------
 @api.get("/daily-report")
 def daily_report_ep():
-    return jsonify(daily_report.generate(request.args.get("market", "th"),
+    return jsonify(daily_report.generate(request.args.get("market", "us"),
                                          int(request.args.get("top", 5))))
 
 
@@ -222,12 +225,254 @@ def watchlist_delete(ticker):
     return jsonify({"ok": True})
 
 
+# ---------------- 15) ข่าวโลก GDELT + ลูกโลก 3D ----------------
+@api.get("/world/points")
+def world_points_ep():
+    """จุดข่าวพร้อมพิกัดสำหรับปักบนลูกโลก (ระบุ theme= เพื่อกรองธีมเดียว)"""
+    theme = request.args.get("theme", "")
+    timespan = request.args.get("timespan", "24h")
+    if theme:
+        return jsonify(gdelt.world_points(theme=theme, timespan=timespan))
+    return jsonify(gdelt.all_theme_points(timespan=timespan))
+
+
+@api.get("/world/themes")
+def world_themes_ep():
+    """รายชื่อธีมข่าวโลกทั้งหมด + สี"""
+    return jsonify({"themes": [
+        {"key": k, "label": v[0], "query": v[1], "color": v[2]}
+        for k, v in Config.WORLD_THEMES.items()
+    ]})
+
+
+@api.get("/world/signals")
+def world_signals_ep():
+    """tone ล่าสุดของแต่ละธีมข่าวโลก (ข่าวดี/ร้ายผิดปกติแค่ไหน)"""
+    return jsonify(gdelt.theme_signals(request.args.get("timespan", "7d")))
+
+
+@api.get("/world/news")
+def world_news_ep():
+    q = request.args.get("q", "")
+    theme = request.args.get("theme", "")
+    if theme and not q:
+        q = gdelt.theme_query(theme)
+    return jsonify(gdelt.articles(q or "stock market",
+                                  limit=int(request.args.get("limit", 20)),
+                                  timespan=request.args.get("timespan", "24h")))
+
+
+@api.get("/world/tone")
+def world_tone_ep():
+    """timeline ของ tone (ใช้วาดกราฟข่าว vs ราคา)"""
+    theme = request.args.get("theme", "")
+    q = gdelt.theme_query(theme) if theme else request.args.get("q", "")
+    days = int(request.args.get("days", Config.LEARN_WINDOW_DAYS))
+    return jsonify(gdelt.tone_timeline(q, timespan=f"{days}d"))
+
+
+# ---------------- 16) Learning engine (หาจุดเชื่อม ข่าว ↔ ราคา) ----------------
+@api.get("/learn/status")
+def learn_status_ep():
+    return jsonify(correlation.status())
+
+
+@api.post("/learn/snapshot")
+def learn_snapshot_ep():
+    """เก็บภาพนิ่งของข่าว+ราคา ณ ตอนนี้ลงคลังข้อมูลสะสม"""
+    return jsonify(correlation.snapshot())
+
+
+@api.get("/learn/analyze/<ticker>")
+def learn_analyze_ep(ticker):
+    """หาความสัมพันธ์ ข่าวโลก/มหภาค ↔ ผลตอบแทนของหุ้นตัวนี้"""
+    days = int(request.args.get("days", Config.LEARN_WINDOW_DAYS))
+    return jsonify(correlation.analyze(ticker, days=days))
+
+
+@api.get("/learn/catalyst/<ticker>")
+def learn_catalyst_ep(ticker):
+    """ข่าวโลกตอนนี้ กำลังหนุนหรือกดดันหุ้นตัวนี้ (จากความรู้ที่เรียนมา)"""
+    return jsonify(correlation.catalyst_signal(ticker))
+
+
+@api.post("/learn/watchlist")
+def learn_watchlist_ep():
+    """สั่งเรียนรู้หุ้นใน watchlist + พอร์ต ทีเดียวทั้งหมด"""
+    a = _args()
+    return jsonify(correlation.learn_watchlist(
+        days=int(a.get("days") or Config.LEARN_WINDOW_DAYS),
+        limit=int(a.get("limit") or 15)))
+
+
+@api.get("/learn/backtest/<ticker>")
+def learn_backtest_ep(ticker):
+    """
+    ทดสอบว่า "ถ้าเทรดตามสัญญาณข่าวจริง ๆ จะได้กำไรไหม"
+    แบ่งข้อมูล train/test — หาสัญญาณจาก train เทรดใน test เท่านั้น
+    """
+    return jsonify(news_backtest.run(
+        ticker,
+        days=int(request.args.get("days", 540)),
+        train_frac=float(request.args.get("train_frac", 0.6)),
+        fee_pct=float(request.args.get("fee", news_backtest.DEFAULT_FEE_PCT)),
+    ))
+
+
+# ---------------- 17) เรียนรู้จากวิกฤตในอดีต + สัญญาณเตือนล่วงหน้า ----------------
+@api.get("/crisis/list")
+def crisis_list_ep():
+    """รายชื่อวิกฤตสำคัญที่ใช้ศึกษา"""
+    return jsonify({"crises": crisis.CRISES})
+
+
+@api.get("/crisis/impact/<ticker>")
+def crisis_impact_ep(ticker):
+    """วิกฤตแต่ละครั้งทำให้หุ้นตัวนี้ร่วงแค่ไหน ฟื้นนานเท่าไหร่"""
+    return jsonify(crisis.impact(ticker, request.args.get("benchmark", "^GSPC")))
+
+
+@api.get("/crisis/signals")
+def crisis_signals_ep():
+    """สัญญาณเตือนล่วงหน้า — ก่อนวิกฤตหน้าตาเป็นยังไง วันนี้อยู่ตรงไหน"""
+    return jsonify(crisis.warning_signals())
+
+
+@api.get("/learn/links")
+def learn_links_ep():
+    """ความสัมพันธ์ทั้งหมดที่เรียนรู้เก็บไว้แล้ว"""
+    return jsonify(correlation.learned(request.args.get("target", ""),
+                                       int(request.args.get("limit", 50))))
+
+
+# ---------------- 19) Volume Profile (ติดอาวุธจาก volume-edge) ----------------
+@api.get("/volume-profile/<ticker>")
+def volume_profile_ep(ticker):
+    """Volume Profile: POC / Value Area / HVN / LVN + histogram สำหรับวาดกราฟ"""
+    return jsonify(volume_profile.build_profile(ticker))
+
+
+@api.get("/volume-setup/<ticker>")
+def volume_setup_ep(ticker):
+    """ดูว่าหุ้นตัวนี้เข้า setup VAB/VAR ตอนนี้ไหม + จุดเข้า/ตัดขาดทุน/เป้า + เหตุผลไทย"""
+    return jsonify(volume_profile.detect_setup(ticker))
+
+
+@api.post("/volume-scan")
+def volume_scan_ep():
+    """สแกนหาหุ้นที่กำลังเข้า setup VAB/VAR ตอนนี้ (จาก watchlist หรือ universe)"""
+    a = _args()
+    source = a.get("source", "watchlist")
+    if source == "watchlist":
+        tickers = [w["ticker"] for w in query("SELECT ticker FROM watchlist")]
+        if not tickers:
+            tickers = Config.DEFAULT_US_TICKERS
+    elif source == "th":
+        from services.universe import get_universe
+        tickers = get_universe("th")
+    elif source == "us":
+        from services.universe import get_universe
+        tickers = get_universe("us")
+    else:
+        tickers = a.get("tickers") or Config.DEFAULT_US_TICKERS
+    return jsonify(volume_profile.scan_setups(
+        tickers, max_scan=int(a.get("max_scan", volume_profile.SCAN_CAP))))
+
+
+# ---------------- 20) Strategy Lab — โรงงานทดสอบกลยุทธ์หลายตระกูล ----------------
+@api.get("/lab/strategies")
+def lab_strategies_ep():
+    """รายชื่อกลยุทธ์ทั้งหมดในแล็บ + สถานะ (รันได้/มีหลักฐานแล้ว/อยู่ในแผน)"""
+    return jsonify(strategy_lab.list_strategies())
+
+
+@api.get("/lab/run/<key>/<ticker>")
+def lab_run_ep(key, ticker):
+    """รันกลยุทธ์ 1 ตัวกับหุ้น 1 ตัว ผ่านประตูความซื่อสัตย์ (walk-forward + ค่าธรรมเนียม)"""
+    return jsonify(strategy_lab.run(
+        key, ticker,
+        days=int(request.args.get("days", strategy_lab.DEFAULT_DAYS)),
+        train_frac=float(request.args.get("train_frac", 0.6)),
+        fee_pct=float(request.args.get("fee", strategy_lab.DEFAULT_FEE_PCT)),
+    ))
+
+
+@api.post("/lab/league")
+def lab_league_ep():
+    """จัดอันดับทุกกลยุทธ์ข้ามตะกร้าหุ้น — ตัวไหนน่าตามต่อ ตัวไหนตกรอบ"""
+    a = _args()
+    tickers = a.get("tickers")
+    if a.get("source") == "watchlist":
+        tickers = [w["ticker"] for w in query("SELECT ticker FROM watchlist")] or None
+    return jsonify(strategy_lab.league(
+        tickers=tickers,
+        days=int(a.get("days") or strategy_lab.DEFAULT_DAYS),
+        include=a.get("include")))
+
+
+# ---------------- 21) สะพานเชื่อมระบบเทรด MT5 ที่บ้าน (volume-edge) ----------------
+@api.get("/ve/overview")
+def ve_overview_ep():
+    """ทุกอย่างของหน้าพอร์ต MT5 ในคำขอเดียว (สถานะ + ไม้เปิด + สัญญาณ + สถิติ)"""
+    return jsonify(volume_edge.overview())
+
+
+@api.get("/ve/status")
+def ve_status_ep():
+    return jsonify(volume_edge.status())
+
+
+@api.get("/ve/positions")
+def ve_positions_ep():
+    """ไม้จริงใน MT5 + เหตุผลตอนเข้า + มุมมองข่าวโลกของ NEBULA ต่อไม้นั้น"""
+    return jsonify(volume_edge.positions())
+
+
+@api.get("/ve/trades")
+def ve_trades_ep():
+    return jsonify(volume_edge.trades(
+        limit=int(request.args.get("limit", 50)),
+        status_filter=request.args.get("status", "all")))
+
+
+@api.get("/ve/signals")
+def ve_signals_ep():
+    return jsonify(volume_edge.signals(int(request.args.get("limit", 40))))
+
+
+@api.get("/ve/stats")
+def ve_stats_ep():
+    return jsonify(volume_edge.setup_stats())
+
+
+@api.get("/ve/equity")
+def ve_equity_ep():
+    return jsonify(volume_edge.equity(int(request.args.get("limit", 400))))
+
+
+@api.get("/ve/screener")
+def ve_screener_ep():
+    return jsonify(volume_edge.screener_latest())
+
+
+# ---------------- 18) ตรวจระบบ ----------------
+@api.get("/selfcheck")
+def selfcheck_ep():
+    """ตรวจว่าแหล่งข้อมูลภายนอกทุกตัวใช้งานได้จริงไหม (ใช้เวลาสักครู่)"""
+    syms = request.args.get("symbols", "1") == "1"
+    res = selfcheck.run(include_symbols=syms)
+    if request.args.get("format") == "text":
+        return selfcheck.as_text(res), 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return jsonify(res)
+
+
 # ---------------- defaults / config ----------------
 @api.get("/defaults")
 def defaults():
     return jsonify({
         "th": Config.DEFAULT_TH_TICKERS,
         "us": Config.DEFAULT_US_TICKERS,
+        "funds": Config.DEFAULT_FUND_TICKERS,
         "line_configured": bool(Config.LINE_CHANNEL_TOKEN or Config.LINE_NOTIFY_TOKEN),
         "ai_mode": ai_advisory._mode(),
     })

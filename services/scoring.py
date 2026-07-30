@@ -2,28 +2,80 @@
 Unified scoring — รวมคะแนนพื้นฐาน + เทคนิคัล + sentiment เป็นคะแนนรวม 0-100
 พร้อมคำแนะนำ (ซื้อ/ถือ/ขาย) จุดเข้า จุดตัดขาดทุน และเป้าราคา
 """
-from services import fundamental, technical, sentiment as sentiment_svc, stock_data
+from concurrent.futures import ThreadPoolExecutor
+
+from services import (fundamental, technical, sentiment as sentiment_svc,
+                      stock_data, correlation, volume_profile)
 
 
 # น้ำหนักของแต่ละด้าน (ปรับได้ง่ายในอนาคต)
 WEIGHTS = {"fundamental": 0.45, "technical": 0.35, "sentiment": 0.20}
 
 
-def overall(ticker: str) -> dict:
-    fund = fundamental.analyze(ticker)
-    tech = technical.analyze(ticker)
-    senti = sentiment_svc.stock_sentiment(ticker)
+def _safe(fn, fallback):
+    """เรียกฟังก์ชันที่ต้องต่อเน็ต — ล้มแล้วคืนค่าสำรอง ไม่ให้ทั้งหน้าพัง"""
+    try:
+        return fn()
+    except Exception:
+        return fallback
+
+
+def overall(ticker: str, deep: bool = True) -> dict:
+    """
+    คะแนนรวม 0-100
+
+    deep=False -> ข้ามการเรียก GDELT รายหุ้น (ใช้ตอนสแกนหลายสิบตัว)
+    ส่วน catalyst ยังทำงานปกติเพราะอ่านจาก DB + สภาพข่าวโลกที่ cache ไว้แล้ว
+
+    ทั้ง 4 ส่วน (พื้นฐาน/เทคนิคัล/ข่าว/volume) ไม่ต้องพึ่งผลของกันและกัน
+    จึงดึงพร้อมกัน — เวลารวมเท่ากับตัวที่ช้าที่สุด ไม่ใช่ผลรวมของทุกตัว
+    (เดิมเรียงต่อกันทีละตัว ทำให้หน้าวิเคราะห์ค้างนานเมื่อแหล่งใดแหล่งหนึ่งช้า)
+    """
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_fund = ex.submit(_safe, lambda: fundamental.analyze(ticker),
+                           {"quote": {}, "fund_score": 50})
+        f_tech = ex.submit(_safe, lambda: technical.analyze(ticker), {"tech_score": 50})
+        f_senti = ex.submit(_safe,
+                            lambda: sentiment_svc.stock_sentiment(ticker, deep=deep),
+                            {"sentiment_score": 50, "summary": {}})
+        f_vp = ex.submit(_safe, lambda: volume_profile._score_component(ticker),
+                         {"ok": False, "adjust": 0, "setup": None}) if deep else None
+
+        fund = f_fund.result()
+        tech = f_tech.result()
+        senti = f_senti.result()
+        vp = (f_vp.result() if f_vp is not None
+              else {"ok": False, "adjust": 0, "setup": None, "skipped": True})
+
+    fund.setdefault("quote", {})
 
     f_score = fund.get("fund_score", 50)
     t_score = tech.get("tech_score", 50)
     s_score = senti.get("sentiment_score", 50)
 
-    total = round(
+    base = round(
         f_score * WEIGHTS["fundamental"]
         + t_score * WEIGHTS["technical"]
         + s_score * WEIGHTS["sentiment"]
     )
-    total = max(0, min(100, total))
+    base = max(0, min(100, base))
+
+    # ---- ปรับด้วยสัญญาณข่าวโลกที่ "เรียนรู้" มาแล้ว (สูงสุด ±10 คะแนน) ----
+    # ถ้ายังไม่เคยเรียนรู้หุ้นตัวนี้ adjust = 0 คะแนนจึงเท่าเดิมทุกประการ
+    try:
+        catalyst = correlation.catalyst_signal(ticker)
+    except Exception:
+        catalyst = {"ok": False, "adjust": 0, "reasons": []}
+    cat_adjust = catalyst.get("adjust", 0) or 0
+
+    # ---- ติดอาวุธ Volume Profile: setup VAB/VAR เพิ่มคะแนน (สูงสุด +8) ----
+    # ทำเฉพาะ deep=True (build_profile ต้องดึงราคา intraday) และเฉพาะหุ้น
+    # ที่เข้า setup จริง + ผ่าน 3 ประตู (ไม่ถูก gate / backtest บวก / R:R>=1.2)
+    vp_adjust = vp.get("adjust", 0) or 0
+
+    # รวมส่วนปรับทั้งหมด แต่จำกัดไม่ให้เกิน ±14 (กันคะแนนแกว่งเกินเหตุ)
+    adjust = max(-14, min(14, cat_adjust + vp_adjust))
+    total = max(0, min(100, round(base + adjust)))
 
     if total >= 70:
         rec = "ซื้อ"
@@ -36,8 +88,16 @@ def overall(ticker: str) -> dict:
     else:
         rec = "ขาย / หลีกเลี่ยง"
 
-    # ---- จุดเข้า/ตัดขาดทุน/เป้าราคา จาก ATR + แนวรับแนวต้าน ----
-    levels = _trade_levels(tech, fund)
+    # ---- จุดเข้า/ตัดขาดทุน/เป้าราคา ----
+    # ถ้ามี setup VP อยู่ ใช้จุดจากโครงสร้าง Volume Profile (แม่นกว่า ATR ล้วน)
+    # ไม่งั้นถอยไปใช้จุดจาก ATR + แนวรับแนวต้านแบบเดิม
+    vp_levels = (vp.get("levels") if vp.get("setup") else None)
+    if vp_levels and vp_levels.get("risk_reward"):
+        levels = dict(vp_levels)
+        levels["source"] = f"volume profile ({vp['setup']})"
+    else:
+        levels = _trade_levels(tech, fund)
+        levels["source"] = "atr"
 
     return {
         "ticker": ticker,
@@ -45,12 +105,18 @@ def overall(ticker: str) -> dict:
         "price": fund["quote"].get("price"),
         "currency": fund["quote"].get("currency"),
         "total_score": total,
+        "base_score": base,
         "breakdown": {
             "fundamental": f_score,
             "technical": t_score,
             "sentiment": s_score,
             "weights": WEIGHTS,
+            "catalyst_adjust": cat_adjust,
+            "volume_adjust": vp_adjust,
+            "total_adjust": adjust,
         },
+        "volume_setup": vp,
+        "catalyst": catalyst,
         "recommendation": rec,
         "levels": levels,
         "fundamental_notes": fund.get("verdict", []),
