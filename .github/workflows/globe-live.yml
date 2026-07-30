@@ -1,14 +1,17 @@
-# พิสูจน์ว่าลูกโลกใช้งานได้จริงและ "ครอบคลุมจริง" — รันโค้ดจริงยิง GDELT จริง
+# พิสูจน์ว่าลูกโลกใช้งานได้จริงและครอบคลุมข่าวสำคัญทั่วโลก — ยิง GDELT จริง
 # เกณฑ์ (ต้องผ่านทุกข้อ):
-#   1) เปิดหน้าต้องไม่ค้าง — ตอบภายใน 1 วินาทีเสมอ แม้ตอนคลังยังว่าง
-#   2) ตัวเก็บเบื้องหลังต้องเก็บให้ครอบคลุมหลายคำ ไม่ใช่กระจุกอยู่ 3 เรื่อง
-#   3) ต้องวาดจุดได้เยอะพอ และรายงานได้ว่าจุดไหนรู้ที่เกิดเหตุจากพาดหัวจริง
+#   1) เปิดหน้าไม่ค้าง — ตอบภายใน 1 วินาทีเสมอ แม้คลังยังว่าง
+#   2) เก็บเหตุการณ์ทั่วโลกจากไฟล์ Events ได้จริง (>= 200 เหตุการณ์)
+#   3) ครอบคลุมหลายประเทศจริง (>= 20 ประเทศ)
+#   4) วาดจุดได้เยอะพอ (>= 60 จุด)
+# ท้ายงานพิมพ์ข้อมูลจุดจริงออกมาเป็น JSON เพื่อเอาไปเรนเดอร์ภาพให้ผู้ใช้ดูได้
 name: globe-live
 
 on:
   push:
     paths:
       - "services/gdelt.py"
+      - "services/gdelt_events.py"
       - "services/country_geo.py"
       - "config.py"
       - ".github/workflows/globe-live.yml"
@@ -26,18 +29,18 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: pip install -q requests python-dotenv flask
-      - name: เปิดหน้าจริง + ปล่อยตัวเก็บเบื้องหลังทำงาน แล้ววัดความครอบคลุม
+      - name: เปิดหน้าจริง + เก็บข่าวทั่วโลก แล้ววัดความครอบคลุม
         env:
           LEARN_AUTO: "0"
           DB_PATH: /tmp/globe_live.db
         run: |
-          # -u = ไม่บัฟเฟอร์ผลลัพธ์ · faulthandler จะพิมพ์ stack ตอนค้างให้เห็นว่าค้างที่บรรทัดไหน
+          # -u = ไม่บัฟเฟอร์ · faulthandler พิมพ์ stack ถ้าค้าง จะได้รู้ตำแหน่งจริง
           python -u - <<'PY'
-          import faulthandler, time
-          faulthandler.dump_traceback_later(660, exit=True)
+          import faulthandler, json, time
+          faulthandler.dump_traceback_later(700, exit=True)
           from database import init_db
           init_db()
-          from services import gdelt
+          from services import gdelt, gdelt_events
 
           print("===== 1) เปิดหน้าลูกโลก 5 ครั้ง — ต้องตอบเร็วทุกครั้ง =====")
           slowest = 0.0
@@ -47,62 +50,69 @@ jobs:
               el = time.time() - t0
               slowest = max(slowest, el)
               print(f"  ครั้งที่ {i}: {el:.2f}s | จุด={len(res.get('points') or [])} "
-                    f"| ข่าวในคลัง={res.get('pool_size')} | กำลังเก็บ={res.get('filling')}")
-              time.sleep(3)
+                    f"| เหตุการณ์={res.get('events')} | กำลังเก็บ={res.get('filling')}")
+              time.sleep(2)
           fast_ok = slowest < 1.0
           print(f"  ช้าที่สุด {slowest:.2f}s -> {'ผ่าน' if fast_ok else 'ไม่ผ่าน'}")
 
           print()
-          print("===== 2) รอตัวเก็บเบื้องหลัง (ดูคลังและความครอบคลุมโตขึ้น) =====")
+          print("===== 2) รอตัวเก็บเบื้องหลังทำงาน =====")
           start = time.time()
-          while time.time() - start < 330:
+          while time.time() - start < 300:
               time.sleep(20)
               res = gdelt.all_theme_points("24h")
-              st = res.get("filler") or {}
-              print(f"  +{int(time.time()-start):>3}s | ข่าว={res.get('pool_size'):<4}"
-                    f" คำที่เก็บได้={len(gdelt.pool_words()):<3}"
-                    f" จุด={len(res.get('points') or []):<3}"
-                    f" ยิงไป={st.get('tried')} สำเร็จ={st.get('ok')}")
+              st = gdelt_events.status()
+              print(f"  +{int(time.time()-start):>3}s | เหตุการณ์={st['events']:<5}"
+                    f" ประเทศ={st['countries']:<3}"
+                    f" ข่าวจากคำค้น={res.get('pool_size'):<4}"
+                    f" จุด={len(res.get('points') or []):<4}"
+                    f" กำลังเก็บ={res.get('filling')}")
               if not res.get("filling"):
                   break
 
           final = gdelt.all_theme_points("24h")
           pts = final.get("points") or []
-          words = gdelt.pool_words()
+          st = gdelt_events.status()
 
           print()
           print("===== ธีม =====")
           for t in final.get("themes", []):
-              print(f"  {t['key']:<10} จุด={t['count']:<3} ข่าว={t['articles']}")
+              print(f"  {t['key']:<10} จุด={t['count']}")
+          print(f"  แหล่งข้อมูล: {final.get('sources')}")
 
           print()
-          print(f"===== คำที่เก็บข่าวได้ ({len(words)} คำ) =====")
-          print("  " + ", ".join(sorted(words)))
+          print("===== 20 จุดที่โลกรายงานหนักที่สุด =====")
+          for p in sorted(pts, key=lambda x: -(x.get('mentions') or 0))[:20]:
+              print(f"  {p['name'][:34]:<34} {p['theme']:<10} "
+                    f"เหตุการณ์={p['count']:<3} ถูกรายงาน={p.get('mentions', '-')}")
 
-          exact = sum(p.get("exact", 0) for p in pts)
-          total = sum(p["count"] for p in pts)
+          names = " ".join(p["name"] for p in pts).lower()
+          hot = [k for k in ("iran", "israel", "ukraine", "russia", "taiwan",
+                             "gaza", "china", "united states", "japan", "india",
+                             "korea", "thailand", "germany", "brazil", "nigeria")
+                 if k in names]
           print()
-          print("===== จุดบนลูกโลก (เรียงตามจำนวนข่าว) =====")
-          for p in sorted(pts, key=lambda x: -x["count"])[:25]:
-              print(f"  {p['name']:<22} {p['theme']:<10} ข่าว={p['count']:<3} "
-                    f"รู้ที่เกิดเหตุจากพาดหัว={p.get('exact')}")
-          print(f"  รวม {len(pts)} จุด · {total} ข่าว "
-                f"· รู้ที่เกิดเหตุจริง {exact} ข่าว ({(100*exact//total) if total else 0}%)")
+          print(f"  จุดร้อนที่จับได้รอบนี้ ({len(hot)}): {', '.join(hot) or '(ไม่มี)'}")
 
-          names = {p["name"] for p in pts}
-          hot = [n for n in ("Iran", "Israel", "Strait of Hormuz", "Red Sea",
-                             "Taiwan", "Taiwan Strait", "Ukraine", "Russia",
-                             "Gaza", "China", "United States", "Wall Street")
-                 if n in names]
-          print(f"  จุดร้อนของโลกที่จับได้รอบนี้: {', '.join(hot) or '(ไม่มี)'}")
-
-          cover_ok = len(words) >= 8
-          points_ok = len(pts) >= 25
+          events_ok = st["events"] >= 200
+          country_ok = st["countries"] >= 20
+          points_ok = len(pts) >= 60
           print()
           print("===== สรุป =====")
-          print(f"  เปิดหน้าไม่ค้าง (< 1.00s)        : {'PASS' if fast_ok else 'FAIL'} ({slowest:.2f}s)")
-          print(f"  ครอบคลุมหลายคำ (>= 8 คำ)        : {'PASS' if cover_ok else 'FAIL'} ({len(words)} คำ)")
-          print(f"  วาดจุดได้เยอะพอ (>= 25 จุด)      : {'PASS' if points_ok else 'FAIL'} ({len(pts)} จุด)")
-          ok = fast_ok and cover_ok and points_ok
-          print("PASS - ลูกโลกใช้งานได้จริงและครอบคลุมจริง" if ok else "FAIL - ยังไม่ผ่านเกณฑ์")
+          print(f"  เปิดหน้าไม่ค้าง (< 1.00s)     : {'PASS' if fast_ok else 'FAIL'} ({slowest:.2f}s)")
+          print(f"  เหตุการณ์ทั่วโลก (>= 200)     : {'PASS' if events_ok else 'FAIL'} ({st['events']})")
+          print(f"  ครอบคลุมประเทศ (>= 20)       : {'PASS' if country_ok else 'FAIL'} ({st['countries']})")
+          print(f"  จุดบนลูกโลก (>= 60)          : {'PASS' if points_ok else 'FAIL'} ({len(pts)})")
+          ok = fast_ok and events_ok and country_ok and points_ok
+          print("PASS - ลูกโลกครอบคลุมข่าวสำคัญทั่วโลกจริง" if ok
+                else "FAIL - ยังไม่ผ่านเกณฑ์")
+
+          # ข้อมูลจริงสำหรับเอาไปเรนเดอร์ภาพให้ผู้ใช้ดู (ตัดลิงก์ข่าวออกให้สั้น)
+          slim = [{k: p[k] for k in ("lat", "lon", "name", "count", "theme",
+                                     "color") if k in p}
+                  for p in sorted(pts, key=lambda x: -(x.get('mentions') or 0))[:90]]
+          print()
+          print("PROOF_JSON_BEGIN")
+          print(json.dumps(slim, ensure_ascii=False, separators=(",", ":")))
+          print("PROOF_JSON_END")
           PY
