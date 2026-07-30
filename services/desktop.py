@@ -64,31 +64,53 @@ def ensure_icon() -> Path:
 UTF8_PREFIX = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
 
 
+def _dec(b) -> str:
+    if b is None:
+        return ""
+    if isinstance(b, str):            # เผื่อถูก monkeypatch ในเทสต์
+        return b
+    return b.decode("utf-8", "replace")
+
+
 def ps_run(ps: str, timeout: int = 60):
     """
     เรียก PowerShell แล้วอ่านผลกลับมาโดยไม่พังเรื่อง encoding
 
-    ⚠️ ห้ามใช้ text=True เฉย ๆ เด็ดขาด
-    บน Windows Python จะถอดรหัสผลลัพธ์ด้วย code page ของเครื่อง (เช่น cp1252)
-    ถ้าเจอไบต์ที่ code page นั้นไม่รู้จัก เธรดที่อ่านผลจะตายทั้งเธรด
-    ผลลัพธ์กลายเป็นค่าว่าง แล้วเราจะสรุปว่า "สร้างไอคอนไม่สำเร็จ"
-    ทั้งที่ความจริงคืออ่านคำตอบไม่ออกเท่านั้น — เจอมาแล้วใน CI ของ Windows จริง
+    บทเรียนสองข้อที่ CI ของ Windows จริงสอนมา — ห้ามลืม:
 
-    ทางแก้: บังคับให้ PowerShell พ่นออกมาเป็น UTF-8 แล้วเราถอดเป็น UTF-8
-    พร้อม errors='replace' กันไว้อีกชั้นไม่ให้มีทางพังได้เลย
+    1) ห้ามส่งสคริปต์ที่มีภาษาไทยผ่าน -Command เด็ดขาด
+       ตัวอักษรไทยจะกลายเป็น "?" ทั้งหมดก่อนถึง PowerShell
+       (เครื่องที่ระบบเป็นอังกฤษ code page ไม่มีตัวอักษรไทย)
+       ผลคือไปสั่งบันทึกไฟล์ชื่อ "???????????.lnk" ซึ่ง Windows ปฏิเสธ
+       ขึ้นว่า "Unable to save shortcut"
+       ทางแก้: เขียนสคริปต์ลงไฟล์ .ps1 แบบ UTF-8 ที่มี BOM แล้วสั่ง -File
+       PowerShell 5.1 อ่านไฟล์ที่ไม่มี BOM เป็น ANSI — BOM จึงจำเป็น ไม่ใช่ทางเลือก
+
+    2) ห้ามใช้ text=True
+       Python จะถอดรหัสผลลัพธ์ด้วย code page ของเครื่อง (เช่น cp1252)
+       พอเจอไบต์ที่ถอดไม่ได้ เธรดที่อ่านผลจะตายทั้งเธรด ผลกลายเป็นค่าว่าง
+       แล้วเราจะสรุปผิดว่า "สร้างไอคอนไม่สำเร็จ" ทั้งที่แค่อ่านคำตอบไม่ออก
     """
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-         "-Command", UTF8_PREFIX + ps],
-        capture_output=True, timeout=timeout)
-    def _dec(b):
-        if b is None:
-            return ""
-        if isinstance(b, str):        # เผื่อถูก monkeypatch ในเทสต์
-            return b
-        return b.decode("utf-8", "replace")
-    return (getattr(r, "returncode", 0), _dec(getattr(r, "stdout", b"")),
-            _dec(getattr(r, "stderr", b"")))
+    import tempfile
+
+    fd, path = tempfile.mkstemp(suffix=".ps1")
+    os.close(fd)
+    try:
+        # utf-8-sig = UTF-8 พร้อม BOM ซึ่งเป็นสัญญาณเดียวที่ PowerShell 5.1
+        # ใช้ตัดสินว่าไฟล์นี้เป็น Unicode
+        with open(path, "w", encoding="utf-8-sig") as f:
+            f.write(UTF8_PREFIX + "\n" + ps)
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", path],
+            capture_output=True, timeout=timeout)
+        return (getattr(r, "returncode", 0), _dec(getattr(r, "stdout", b"")),
+                _dec(getattr(r, "stderr", b"")))
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def desktop_dir() -> Path:
@@ -142,7 +164,12 @@ def shortcut_script(link: Path, target: Path, args: str, workdir: Path,
 
 def shortcut_command(link: Path, target: Path, args: str, workdir: Path,
                      icon: Path) -> list:
-    """คำสั่งเต็มสำหรับเรียก PowerShell (แยกไว้เพื่อให้ทดสอบได้)"""
+    """
+    คำสั่งเต็มสำหรับเรียก PowerShell — เก็บไว้เพื่อความเข้ากันได้เท่านั้น
+
+    ⚠️ อย่าใช้เส้นทางนี้กับชื่อที่เป็นภาษาไทย ตัวอักษรจะหายกลายเป็น "?"
+    ของจริงใช้ ps_run() ซึ่งเขียนลงไฟล์ก่อน
+    """
     return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-Command",
             UTF8_PREFIX + shortcut_script(link, target, args, workdir, icon)]

@@ -78,20 +78,17 @@ def test_asks_windows_where_the_desktop_really_is(monkeypatch):
     """
     seen = {}
 
-    class R:
-        stdout = "C:\\Users\\arm\\OneDrive\\Desktop\n"
-
     monkeypatch.setattr(D, "IS_WIN", True)
-    monkeypatch.setattr(D.subprocess, "run",
-                        lambda cmd, **kw: (seen.update(cmd=cmd), R())[1])
+    monkeypatch.setattr(D, "ps_run", lambda ps, **kw: (
+        seen.update(ps=ps), (0, "C:\\Users\\arm\\OneDrive\\Desktop\n", ""))[1])
     got = D.desktop_dir()
-    assert "GetFolderPath" in " ".join(seen["cmd"])
+    assert "GetFolderPath" in seen["ps"]
     assert "OneDrive" in str(got)
 
 
 def test_falls_back_to_home_desktop_if_windows_does_not_answer(monkeypatch):
     monkeypatch.setattr(D, "IS_WIN", True)
-    monkeypatch.setattr(D.subprocess, "run",
+    monkeypatch.setattr(D, "ps_run",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("no ps")))
     assert str(D.desktop_dir()).endswith("Desktop")
 
@@ -135,7 +132,15 @@ def test_never_hands_decoding_to_the_locale_code_page(monkeypatch):
     assert seen["kw"].get("capture_output") is True
 
 
-def test_forces_powershell_to_speak_utf8(monkeypatch):
+def test_sends_the_script_as_a_utf8_bom_file_not_on_the_command_line(monkeypatch):
+    """
+    บั๊กจริงจาก CI ของ Windows: ชื่อ "เทรดข่าวโลก" ที่ส่งผ่าน -Command
+    กลายเป็น "???????????" ทั้งหมด แล้ว Windows ปฏิเสธการบันทึกไฟล์
+    ขึ้นว่า "Unable to save shortcut" — ไอคอนจึงไม่เกิดขึ้นเลย
+
+    ต้องเขียนลงไฟล์ .ps1 ที่มี BOM แล้วใช้ -File เท่านั้น
+    (PowerShell 5.1 อ่านไฟล์ที่ไม่มี BOM เป็น ANSI ตัวอักษรไทยจะเพี้ยนอีกแบบ)
+    """
     seen = {}
 
     class R:
@@ -143,10 +148,39 @@ def test_forces_powershell_to_speak_utf8(monkeypatch):
         stdout = b""
         stderr = b""
 
-    monkeypatch.setattr(D.subprocess, "run",
-                        lambda cmd, **kw: (seen.update(cmd=cmd), R())[1])
-    D.ps_run("Get-Thing")
-    assert "OutputEncoding" in " ".join(seen["cmd"])
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        path = cmd[cmd.index("-File") + 1]
+        seen["raw"] = open(path, "rb").read()
+        return R()
+
+    monkeypatch.setattr(D.subprocess, "run", fake_run)
+    D.ps_run(f"$name = '{D.APP_NAME}'")
+
+    assert "-File" in seen["cmd"], "ต้องใช้ -File ไม่ใช่ -Command"
+    assert "-Command" not in seen["cmd"]
+    assert seen["raw"].startswith(b"\xef\xbb\xbf"), "ไฟล์ต้องมี UTF-8 BOM"
+    assert D.APP_NAME.encode("utf-8") in seen["raw"], \
+        "ชื่อภาษาไทยต้องอยู่ในไฟล์ครบ ไม่ถูกแปลงเป็น ?"
+    assert b"OutputEncoding" in seen["raw"]
+
+
+def test_cleans_up_its_temp_script(monkeypatch):
+    """ไม่งั้นโฟลเดอร์ temp จะมีขยะเพิ่มทุกครั้งที่กดปุ่ม"""
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(cmd, **kw):
+        seen["path"] = cmd[cmd.index("-File") + 1]
+        return R()
+
+    monkeypatch.setattr(D.subprocess, "run", fake_run)
+    D.ps_run("x")
+    assert not os.path.exists(seen["path"])
 
 
 def test_reports_the_real_powershell_error_not_a_blank_one(monkeypatch, tmp_path):
