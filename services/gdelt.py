@@ -19,6 +19,7 @@ import urllib.parse
 from config import Config
 from database import cache_get, cache_set
 from services import country_geo
+from services import gdelt_events
 
 try:
     import requests
@@ -303,6 +304,16 @@ def fill_rounds(target: int = FILL_TARGET, max_rounds: int = FILL_MAX_ROUNDS,
 
 def _fill_loop():
     try:
+        # 1) เหตุการณ์ทั่วโลกก่อน — เร็วและแทบไม่เคยล้ม (ไฟล์นิ่ง 54 KB ไม่ติดโควตา)
+        #    ทำก่อนเสมอเพื่อให้ลูกโลกมีข่าวสำคัญทั่วโลกโดยไม่ต้องรอ ArtList ที่ช้า
+        try:
+            res = gdelt_events.collect()
+            with _filler_lock:
+                _filler["events"] = res
+        except Exception as e:
+            with _filler_lock:
+                _filler["events"] = {"ok": False, "error": str(e)[:150]}
+        # 2) แล้วค่อยเติมคลังคำ (เสริมด้านตลาด/เศรษฐกิจที่ Events ไม่ครอบคลุม)
         fill_rounds()
     except Exception as e:                       # เธรดเบื้องหลังห้ามล้มเงียบ ๆ
         with _filler_lock:
@@ -324,7 +335,14 @@ def ensure_filling() -> bool:
         if _filler["running"]:
             return True
         arts = _pool_load()["articles"]
-        if len(arts) >= FILL_TARGET and len(pool_words(arts)) >= FILL_MIN_WORDS:
+        pool_ok = (len(arts) >= FILL_TARGET
+                   and len(pool_words(arts)) >= FILL_MIN_WORDS)
+        # คลังเหตุการณ์ทั่วโลกต้องมีของด้วย ไม่ใช่ดูแค่คลังคำ
+        try:
+            events_ok = gdelt_events.status().get("events", 0) >= 200
+        except Exception:
+            events_ok = False
+        if pool_ok and events_ok:
             return False
         _filler.update({"running": True, "started": time.time(),
                         "tried": 0, "ok": 0, "added": 0, "finished": None})
@@ -456,13 +474,16 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     snap = world_snapshot(timespan, refill=False)
     label, q, color = Config.WORLD_THEMES.get(
         theme, ("ข่าวทั่วโลก", query or "", "#4dd4ff"))
-    pts = [p for p in snap.get("points", []) if not theme or p.get("theme") == theme]
+    ev = _events_points(theme=theme)
+    pts = ev["points"] + [p for p in snap.get("points", [])
+                          if not theme or p.get("theme") == theme]
     return {
         "theme": theme, "label": label, "color": color, "query": q,
         "timespan": snap.get("timespan", timespan),
         "points": pts, "ok": bool(pts), "total": len(pts),
         "filling": snap.get("filling", False),
         "pool_size": snap.get("pool_size", 0),
+        "events": ev.get("events", 0),
         "articles_seen": snap.get("articles_seen"),
         "stale": snap.get("stale", False),
         "note": snap.get("note"),
@@ -582,39 +603,78 @@ def all_theme_points(timespan: str = "24h") -> dict:
     """
     filling = ensure_filling()
     snap = world_snapshot(timespan, refill=False)
-    themes = snap.get("themes") or _empty_themes()
+    ev = _events_points()
+    points = ev["points"] + (snap.get("points") or [])
+    themes = _merge_theme_counts(snap.get("themes") or _empty_themes(), points)
     empty = [t for t in themes if not t.get("count")]
     st = filler_state()
 
     notes = []
     if filling:
-        notes.append(f"กำลังเก็บข่าวเพิ่มเบื้องหลัง (ได้แล้ว {snap.get('pool_size', 0)} ข่าว) "
-                     "— ลูกโลกจะขึ้นครบเองไม่ต้องกดอะไร")
-    if snap.get("ok") and empty and not filling:
-        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวในคลัง — ระบบทยอยเก็บเพิ่มให้เอง")
+        notes.append(f"กำลังเก็บข่าวเพิ่มเบื้องหลัง (เหตุการณ์ทั่วโลก {ev['events']} รายการ "
+                     f"· ข่าวจากคำค้น {snap.get('pool_size', 0)} ชิ้น) — ลูกโลกจะขึ้นครบเอง")
+    if points and empty and not filling:
+        notes.append(f"{len(empty)} ธีมยังไม่มีข้อมูลรอบนี้ — ระบบทยอยเก็บเพิ่มให้เอง")
 
     return {
         "themes": themes,
-        "points": snap.get("points", []),
+        "points": points,
         "timespan": timespan,
-        "ok": snap.get("ok", False),
+        "ok": bool(points),
         "filling": filling,
         "filler": st,
-        "skipped_themes": len(empty) if snap.get("ok") else len(themes),
+        "skipped_themes": len(empty) if points else len(themes),
         "pool_size": snap.get("pool_size", 0),
+        "events": ev["events"],
+        "event_places": ev["total_places"],
+        "sources": {"events": len(ev["points"]), "keywords": len(snap.get("points") or [])},
         "articles_seen": snap.get("articles_seen"),
         "unclassified": snap.get("unclassified"),
-        "error": snap.get("error"),
+        "error": None if points else (snap.get("error") or "ยังไม่มีข้อมูลข่าวในคลัง"),
         "note": " · ".join(notes) if notes else None,
-        "fetched_at": snap.get("fetched_at") or dt.datetime.now().isoformat(timespec="seconds"),
+        "fetched_at": ev.get("updated") or snap.get("fetched_at")
+                      or dt.datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def _events_points(theme: str = "") -> dict:
+    """
+    จุดจากไฟล์ Events ของ GDELT — ข่าวสำคัญทั่วโลกพร้อมพิกัดที่เกิดเหตุจริง
+    ล้มก็ไม่ทำให้ลูกโลกพัง (ยังมีจุดจากคลังคำอยู่)
+    """
+    try:
+        return gdelt_events.points(theme=theme)
+    except Exception as e:
+        return {"points": [], "events": 0, "total_places": 0,
+                "updated": None, "error": str(e)[:150]}
+
+
+def _merge_theme_counts(themes: list, points: list) -> list:
+    """นับจำนวนจุดของแต่ละธีมใหม่จากจุดที่รวมทั้งสองแหล่งแล้ว"""
+    by_theme = {}
+    for p in points:
+        k = p.get("theme")
+        by_theme[k] = by_theme.get(k, 0) + 1
+    out = []
+    for t in themes:
+        t = dict(t)
+        t["count"] = by_theme.get(t["key"], 0)
+        t["ok"] = bool(t["count"])
+        out.append(t)
+    return out
 
 
 def warm_cache(timespan: str = "24h") -> dict:
     """เติมคลังข่าวล่วงหน้าจากตัวเก็บข้อมูลรายชั่วโมง (บล็อกได้ เพราะไม่มีใครรออยู่)"""
+    try:
+        events = gdelt_events.collect()
+    except Exception as e:
+        events = {"ok": False, "error": str(e)[:150]}
     res = fill_rounds(max_rounds=6, max_seconds=180)
     snap = world_snapshot(timespan, refill=False)
-    return {"fetched": res, "points": len(snap.get("points", [])),
+    ev = _events_points()
+    return {"fetched": res, "events": events,
+            "points": len(ev["points"]) + len(snap.get("points", [])),
             "pool_size": snap.get("pool_size", 0)}
 
 
