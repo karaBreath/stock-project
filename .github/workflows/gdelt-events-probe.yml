@@ -1,0 +1,113 @@
+# วัดว่าไฟล์ Events ของ GDELT ใช้แทน API ที่ติดโควตาได้จริงไหม
+# ต้องได้คำตอบ 4 ข้อก่อนเขียนโค้ด (วัดก่อน ไม่เดา):
+#   1) โหลดไฟล์ได้จริงไหม ใหญ่เท่าไหร่ ใช้เวลาเท่าไหร่ ติด 429 ไหม
+#   2) มีพิกัดที่เกิดเหตุจริงกี่ % ของแถว
+#   3) ครอบคลุมกี่ประเทศ และมีจุดร้อนของโลกจริงไหม (อิหร่าน/อิสราเอล/ยูเครน/ไต้หวัน)
+#   4) คัด "ข่าวสำคัญ" ด้วย NumMentions ได้ผลหน้าตาเป็นอย่างไร
+name: gdelt-events-probe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/gdelt-events-probe.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -q requests
+      - name: โหลดไฟล์ Events ล่าสุด แล้ววัดว่าใช้งานได้จริงแค่ไหน
+        run: |
+          python -u - <<'PY'
+          import csv, io, time, zipfile, collections
+          import requests
+
+          UA = "NEBULA-Stock-App/1.0 (educational stock research)"
+          S = requests.Session()
+          S.headers["User-Agent"] = UA
+
+          print("===== 1) ไฟล์อัปเดตล่าสุดมีอะไรบ้าง =====")
+          t0 = time.time()
+          r = S.get("http://data.gdeltproject.org/gdeltv2/lastupdate.txt", timeout=60)
+          print(f"lastupdate.txt -> HTTP {r.status_code} ใน {time.time()-t0:.1f}s")
+          print(r.text.strip()[:600])
+          lines = [l.split() for l in r.text.strip().splitlines() if l.strip()]
+          urls = {l[-1].rsplit("/", 1)[-1].split(".")[1]: l[-1] for l in lines if len(l) >= 3}
+          print("ชนิดไฟล์ที่ได้:", list(urls))
+
+          export_url = next((l[-1] for l in lines if ".export." in l[-1]), None)
+          if not export_url:
+              print("!! ไม่เจอไฟล์ export — จบ")
+              raise SystemExit
+
+          print()
+          print("===== 2) โหลดไฟล์ Events =====")
+          t0 = time.time()
+          z = S.get(export_url, timeout=120)
+          dl = time.time() - t0
+          print(f"{export_url}")
+          print(f"HTTP {z.status_code} · {len(z.content)/1024:.0f} KB (zip) · {dl:.1f}s")
+          if z.status_code != 200:
+              print("body:", z.text[:300]); raise SystemExit
+
+          zf = zipfile.ZipFile(io.BytesIO(z.content))
+          name = zf.namelist()[0]
+          raw = zf.read(name).decode("utf-8", "replace")
+          rows = list(csv.reader(io.StringIO(raw), delimiter="\t"))
+          print(f"แตกไฟล์ {name} -> {len(rows)} เหตุการณ์ · {len(raw)/1024/1024:.1f} MB")
+          print(f"จำนวนคอลัมน์: {len(rows[0]) if rows else 0}")
+
+          # ตำแหน่งคอลัมน์ตามสเปค GDELT 2.0 Events (นับจาก 0)
+          I_DATE, I_ROOT = 1, 28
+          I_GOLD, I_MENT, I_TONE = 30, 31, 34
+          I_GEO_NAME, I_GEO_CC, I_LAT, I_LON = 36, 37, 39, 40
+          I_URL = 57
+
+          print()
+          print("===== 3) มีพิกัดที่เกิดเหตุจริงกี่ % =====")
+          with_geo = [r for r in rows if len(r) > I_LON and r[I_LAT] and r[I_LON]]
+          print(f"มีพิกัด {len(with_geo)}/{len(rows)} แถว "
+                f"({100*len(with_geo)//max(1,len(rows))}%)")
+
+          cc = collections.Counter(r[I_GEO_CC] for r in with_geo if r[I_GEO_CC])
+          print(f"ครอบคลุม {len(cc)} ประเทศ/พื้นที่")
+          print("  20 อันดับแรก:", ", ".join(f"{k}={v}" for k, v in cc.most_common(20)))
+
+          print()
+          print("===== 4) คัดข่าวสำคัญด้วย NumMentions =====")
+          def ment(r):
+              try: return int(r[I_MENT])
+              except: return 0
+          top = sorted(with_geo, key=ment, reverse=True)[:30]
+          for r in top:
+              try: tone = float(r[I_TONE])
+              except: tone = 0.0
+              print(f"  ถูกรายงาน {ment(r):>5} ครั้ง | โทน {tone:>6.1f} | "
+                    f"{r[I_GEO_NAME][:34]:<34} ({r[I_LAT]},{r[I_LON]}) "
+                    f"root={r[I_ROOT]}")
+              print(f"        {r[I_URL][:120]}")
+
+          print()
+          print("===== 5) จุดร้อนของโลกอยู่ในไฟล์นี้ไหม =====")
+          text = raw.lower()
+          for k in ["iran", "israel", "hormuz", "ukraine", "russia", "taiwan",
+                    "gaza", "red sea", "china", "united states", "thailand",
+                    "japan", "india", "brazil", "nigeria", "venezuela"]:
+              print(f"  {k:<15} เจอ {text.count(k):>5} ครั้ง")
+
+          print()
+          print("===== 6) ยิงซ้ำ 3 ครั้งติดเพื่อดูว่าติดโควตาไหม =====")
+          for i in range(3):
+              t0 = time.time()
+              rr = S.get(export_url, timeout=120, stream=True)
+              n = len(rr.content)
+              print(f"  ครั้งที่ {i+1}: HTTP {rr.status_code} · {n/1024:.0f} KB · "
+                    f"{time.time()-t0:.1f}s")
+              time.sleep(2)
+          PY

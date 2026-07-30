@@ -19,6 +19,7 @@ import urllib.parse
 from config import Config
 from database import cache_get, cache_set
 from services import country_geo
+from services import gdelt_events
 
 try:
     import requests
@@ -244,9 +245,10 @@ def refill_pool(rounds: int = 1) -> dict:
 #                                            โอกาสได้ข่าวมีแค่ ~50% ลูกโลกจึงว่างบ่อย
 # วิธีแก้: เปิดหน้า = อ่านจากคลังทันที (ไม่รอเน็ตเลย) แล้วสั่งให้เธรดเบื้องหลัง
 # ไล่เก็บข่าวต่อจนคลังพอ ระหว่างนั้นหน้าเว็บ poll ดูคลังโตขึ้นแล้ววาดเพิ่มเอง
-FILL_TARGET = 120          # ข่าวในคลังที่ถือว่าพอวาดลูกโลกได้ดี
+FILL_TARGET = 120          # ข่าวในคลังขั้นต่ำ (เงื่อนไขแรกที่ต้องผ่าน)
+FILL_MIN_WORDS = 10        # และต้องมีข่าวจาก "หลายคำ" ไม่ใช่กระจุกอยู่คำเดียว
 FILL_MAX_SECONDS = 300     # ตัวเก็บทำงานต่อรอบไม่เกินเท่านี้
-FILL_MAX_ROUNDS = 24       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
+FILL_MAX_ROUNDS = 30       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
 FILL_GAP_SEC = 0           # ไม่ต้องเว้นเพิ่ม — _throttle บังคับ 5.5 วิ ตามกติกา GDELT อยู่แล้ว
 
 _filler_lock = threading.Lock()
@@ -261,18 +263,30 @@ def filler_state() -> dict:
     return st
 
 
+def pool_words(articles=None) -> set:
+    """คำค้นที่มีข่าวอยู่ในคลังแล้ว — ใช้วัดว่า 'ครอบคลุม' พอหรือยัง"""
+    arts = articles if articles is not None else _pool_load()["articles"]
+    return {(a.get("_w") or "").lower() for a in arts if a.get("_w")}
+
+
 def fill_rounds(target: int = FILL_TARGET, max_rounds: int = FILL_MAX_ROUNDS,
-                max_seconds: int = FILL_MAX_SECONDS, gap: float = FILL_GAP_SEC) -> dict:
+                max_seconds: int = FILL_MAX_SECONDS, gap: float = FILL_GAP_SEC,
+                min_words: int = FILL_MIN_WORDS) -> dict:
     """
-    ไล่เก็บข่าวจนคลังถึงเป้า — ล้มก็ลองคำถัดไป ไม่ยอมแพ้ตั้งแต่ครั้งแรก
+    ไล่เก็บข่าวจนคลัง "ครอบคลุมพอ" — ล้มก็ลองคำถัดไป ไม่ยอมแพ้ตั้งแต่ครั้งแรก
 
     เหตุผล: วัดจริงแล้ว GDELT ปฏิเสธราวครึ่งหนึ่งของคำขอที่ถูกรูปแบบทุกอย่าง
     ยิงครั้งเดียวแล้วเลิก = ลูกโลกว่าง 50% ของเวลา · ยิงต่อ 4 ครั้ง = พลาดหมด ~6%
+
+    เกณฑ์หยุดต้องผ่าน "ทั้งสองข้อ": จำนวนข่าว >= target และมาจากคำค้นต่างกัน
+    >= min_words — เพราะสำเร็จ 3 คำแล้วหยุด (บั๊กเดิม) ทำให้ข่าวกระจุกอยู่ 3 เรื่อง
+    ลูกโลกจึงขาดจุดสำคัญของโลกไปหมด ทั้งที่คลังดู "เต็ม" แล้ว
     """
     deadline = time.time() + max_seconds
     rounds = 0
     while rounds < max_rounds and time.time() < deadline:
-        if len(_pool_load()["articles"]) >= target:
+        pool_arts = _pool_load()["articles"]
+        if len(pool_arts) >= target and len(pool_words(pool_arts)) >= min_words:
             break
         if in_cooldown():
             time.sleep(min(cooldown_left() + 1, 10))
@@ -290,6 +304,16 @@ def fill_rounds(target: int = FILL_TARGET, max_rounds: int = FILL_MAX_ROUNDS,
 
 def _fill_loop():
     try:
+        # 1) เหตุการณ์ทั่วโลกก่อน — เร็วและแทบไม่เคยล้ม (ไฟล์นิ่ง 54 KB ไม่ติดโควตา)
+        #    ทำก่อนเสมอเพื่อให้ลูกโลกมีข่าวสำคัญทั่วโลกโดยไม่ต้องรอ ArtList ที่ช้า
+        try:
+            res = gdelt_events.collect()
+            with _filler_lock:
+                _filler["events"] = res
+        except Exception as e:
+            with _filler_lock:
+                _filler["events"] = {"ok": False, "error": str(e)[:150]}
+        # 2) แล้วค่อยเติมคลังคำ (เสริมด้านตลาด/เศรษฐกิจที่ Events ไม่ครอบคลุม)
         fill_rounds()
     except Exception as e:                       # เธรดเบื้องหลังห้ามล้มเงียบ ๆ
         with _filler_lock:
@@ -310,7 +334,15 @@ def ensure_filling() -> bool:
     with _filler_lock:
         if _filler["running"]:
             return True
-        if len(_pool_load()["articles"]) >= FILL_TARGET:
+        arts = _pool_load()["articles"]
+        pool_ok = (len(arts) >= FILL_TARGET
+                   and len(pool_words(arts)) >= FILL_MIN_WORDS)
+        # คลังเหตุการณ์ทั่วโลกต้องมีของด้วย ไม่ใช่ดูแค่คลังคำ
+        try:
+            events_ok = gdelt_events.status().get("events", 0) >= 200
+        except Exception:
+            events_ok = False
+        if pool_ok and events_ok:
             return False
         _filler.update({"running": True, "started": time.time(),
                         "tried": 0, "ok": 0, "added": 0, "finished": None})
@@ -442,13 +474,16 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     snap = world_snapshot(timespan, refill=False)
     label, q, color = Config.WORLD_THEMES.get(
         theme, ("ข่าวทั่วโลก", query or "", "#4dd4ff"))
-    pts = [p for p in snap.get("points", []) if not theme or p.get("theme") == theme]
+    ev = _events_points(theme=theme)
+    pts = ev["points"] + [p for p in snap.get("points", [])
+                          if not theme or p.get("theme") == theme]
     return {
         "theme": theme, "label": label, "color": color, "query": q,
         "timespan": snap.get("timespan", timespan),
         "points": pts, "ok": bool(pts), "total": len(pts),
         "filling": snap.get("filling", False),
         "pool_size": snap.get("pool_size", 0),
+        "events": ev.get("events", 0),
         "articles_seen": snap.get("articles_seen"),
         "stale": snap.get("stale", False),
         "note": snap.get("note"),
@@ -458,8 +493,54 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     }
 
 
+_PLACE_RX = [None, None]      # [regex, {ชื่อตัวเล็ก: ชื่อจริง}]
+
+
+def _place_matcher():
+    """
+    ตัวจับ "ชื่อสถานที่ในพาดหัว" — เรียงชื่อยาวก่อนสั้น เพื่อให้
+    'South China Sea' ชนะ 'China' และ 'Strait of Hormuz' ชนะ 'Hormuz'
+    """
+    if _PLACE_RX[0] is not None:
+        return _PLACE_RX
+    names = country_geo.all_names(for_headline=True)
+    ordered = sorted(names, key=len, reverse=True)
+    lookup = {n.lower(): n for n in ordered}
+    rx = re.compile(r"(?<![a-z0-9])(" +
+                    "|".join(re.escape(n.lower()) for n in ordered) +
+                    r")(?![a-z0-9])", re.I)
+    _PLACE_RX[0], _PLACE_RX[1] = rx, lookup
+    return _PLACE_RX
+
+
+def _location_of(a: dict):
+    """
+    หา "ที่ที่ข่าวพูดถึง" ให้ได้ก่อน แล้วค่อยถอยไปใช้ประเทศของสำนักข่าว
+
+    ทำไมสำคัญ: GDELT ไม่ให้พิกัดเหตุการณ์ (GEO 2.0 ปิดไปแล้ว) ให้แต่
+    sourcecountry = ประเทศของสำนักข่าว ข่าว "ตึงเครียดที่ช่องแคบฮอร์มุซ" ที่
+    Reuters เขียนจึงเคยไปโผล่ที่อเมริกา ลูกโลกดูมั่วเพราะเหตุนี้
+    ตอนนี้อ่านชื่อสถานที่จากพาดหัวก่อน → จุดตรงกับเรื่องจริง
+    คืน (ชื่อ, (lat, lon), มาจากไหน) โดย 'มาจากไหน' = 'headline' หรือ 'source'
+    """
+    rx, lookup = _place_matcher()
+    title = a.get("title") or ""
+    m = rx.search(title)
+    if m:
+        name = lookup.get(m.group(1).lower())
+        pos = country_geo.coords_for(name) if name else None
+        if pos:
+            return name, pos, "headline"
+
+    src = (a.get("sourcecountry") or "").strip()
+    pos = country_geo.coords_for(src)
+    if pos:
+        return src, pos, "source"
+    return None, None, None
+
+
 def _points_from_articles(arts, color: str, theme: str = "") -> list:
-    """รวมข่าวเป็นจุดรายประเทศ + เก็บลิงก์ข่าวตัวอย่างไว้ให้คลิกดู"""
+    """รวมข่าวเป็นจุดตามที่เกิดเหตุ + เก็บลิงก์ข่าวตัวอย่างไว้ให้คลิกดู"""
     # เลื่อนจุดของแต่ละธีมเล็กน้อย เพื่อไม่ให้แท่งของหลายธีมทับกันสนิท
     seed = sum(ord(c) for c in (theme or "x"))
     off_lat = ((seed % 7) - 3) * 0.55
@@ -467,26 +548,32 @@ def _points_from_articles(arts, color: str, theme: str = "") -> list:
 
     buckets = {}
     for a in arts:
-        country = (a.get("sourcecountry") or "").strip()
-        pos = country_geo.coords_for(country)
+        name, pos, how = _location_of(a)
         if not pos:
             continue
-        b = buckets.setdefault(country, {"count": 0, "articles": []})
+        b = buckets.setdefault(name, {"count": 0, "articles": [], "pos": pos,
+                                      "from_headline": 0})
         b["count"] += 1
-        if len(b["articles"]) < 5 and a.get("url"):
+        if how == "headline":
+            b["from_headline"] += 1
+        if len(b["articles"]) < 6 and a.get("url"):
             b["articles"].append({"title": (a.get("title") or "")[:160],
-                                  "url": a.get("url")})
+                                  "url": a.get("url"),
+                                  "source": a.get("domain", ""),
+                                  "where": how})
 
     points = []
-    for country, b in buckets.items():
-        lat, lon = country_geo.coords_for(country)
+    for name, b in buckets.items():
+        lat, lon = b["pos"]
         points.append({
             "lat": round(lat + off_lat, 4),
             "lon": round(lon + off_lon, 4),
-            "name": country,
+            "name": name,
             "count": b["count"],
             "color": color,
             "articles": b["articles"],
+            # กี่ข่าวที่รู้ที่เกิดเหตุจากพาดหัวจริง (ที่เหลือเดาจากประเทศสำนักข่าว)
+            "exact": b["from_headline"],
         })
     points.sort(key=lambda p: p["count"], reverse=True)
     return points[:Config.GDELT_MAX_POINTS]
@@ -516,39 +603,78 @@ def all_theme_points(timespan: str = "24h") -> dict:
     """
     filling = ensure_filling()
     snap = world_snapshot(timespan, refill=False)
-    themes = snap.get("themes") or _empty_themes()
+    ev = _events_points()
+    points = ev["points"] + (snap.get("points") or [])
+    themes = _merge_theme_counts(snap.get("themes") or _empty_themes(), points)
     empty = [t for t in themes if not t.get("count")]
     st = filler_state()
 
     notes = []
     if filling:
-        notes.append(f"กำลังเก็บข่าวเพิ่มเบื้องหลัง (ได้แล้ว {snap.get('pool_size', 0)} ข่าว) "
-                     "— ลูกโลกจะขึ้นครบเองไม่ต้องกดอะไร")
-    if snap.get("ok") and empty and not filling:
-        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวในคลัง — ระบบทยอยเก็บเพิ่มให้เอง")
+        notes.append(f"กำลังเก็บข่าวเพิ่มเบื้องหลัง (เหตุการณ์ทั่วโลก {ev['events']} รายการ "
+                     f"· ข่าวจากคำค้น {snap.get('pool_size', 0)} ชิ้น) — ลูกโลกจะขึ้นครบเอง")
+    if points and empty and not filling:
+        notes.append(f"{len(empty)} ธีมยังไม่มีข้อมูลรอบนี้ — ระบบทยอยเก็บเพิ่มให้เอง")
 
     return {
         "themes": themes,
-        "points": snap.get("points", []),
+        "points": points,
         "timespan": timespan,
-        "ok": snap.get("ok", False),
+        "ok": bool(points),
         "filling": filling,
         "filler": st,
-        "skipped_themes": len(empty) if snap.get("ok") else len(themes),
+        "skipped_themes": len(empty) if points else len(themes),
         "pool_size": snap.get("pool_size", 0),
+        "events": ev["events"],
+        "event_places": ev["total_places"],
+        "sources": {"events": len(ev["points"]), "keywords": len(snap.get("points") or [])},
         "articles_seen": snap.get("articles_seen"),
         "unclassified": snap.get("unclassified"),
-        "error": snap.get("error"),
+        "error": None if points else (snap.get("error") or "ยังไม่มีข้อมูลข่าวในคลัง"),
         "note": " · ".join(notes) if notes else None,
-        "fetched_at": snap.get("fetched_at") or dt.datetime.now().isoformat(timespec="seconds"),
+        "fetched_at": ev.get("updated") or snap.get("fetched_at")
+                      or dt.datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def _events_points(theme: str = "") -> dict:
+    """
+    จุดจากไฟล์ Events ของ GDELT — ข่าวสำคัญทั่วโลกพร้อมพิกัดที่เกิดเหตุจริง
+    ล้มก็ไม่ทำให้ลูกโลกพัง (ยังมีจุดจากคลังคำอยู่)
+    """
+    try:
+        return gdelt_events.points(theme=theme)
+    except Exception as e:
+        return {"points": [], "events": 0, "total_places": 0,
+                "updated": None, "error": str(e)[:150]}
+
+
+def _merge_theme_counts(themes: list, points: list) -> list:
+    """นับจำนวนจุดของแต่ละธีมใหม่จากจุดที่รวมทั้งสองแหล่งแล้ว"""
+    by_theme = {}
+    for p in points:
+        k = p.get("theme")
+        by_theme[k] = by_theme.get(k, 0) + 1
+    out = []
+    for t in themes:
+        t = dict(t)
+        t["count"] = by_theme.get(t["key"], 0)
+        t["ok"] = bool(t["count"])
+        out.append(t)
+    return out
 
 
 def warm_cache(timespan: str = "24h") -> dict:
     """เติมคลังข่าวล่วงหน้าจากตัวเก็บข้อมูลรายชั่วโมง (บล็อกได้ เพราะไม่มีใครรออยู่)"""
+    try:
+        events = gdelt_events.collect()
+    except Exception as e:
+        events = {"ok": False, "error": str(e)[:150]}
     res = fill_rounds(max_rounds=6, max_seconds=180)
     snap = world_snapshot(timespan, refill=False)
-    return {"fetched": res, "points": len(snap.get("points", [])),
+    ev = _events_points()
+    return {"fetched": res, "events": events,
+            "points": len(ev["points"]) + len(snap.get("points", [])),
             "pool_size": snap.get("pool_size", 0)}
 
 

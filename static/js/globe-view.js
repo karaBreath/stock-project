@@ -255,7 +255,13 @@ routes.globe = async (app) => {
         .pointRadius(d => d.flagged
           ? 0.13
           : Math.min(0.42, 0.11 + Math.log10(1 + d.count) * 0.11))
-        .pointLabel(d => `<div class="globe-tip"><b>${d.name || '—'}</b><br>${d.count} ข่าว</div>`)
+        // บอกตรง ๆ ว่ากี่ข่าว "รู้ที่เกิดเหตุจากพาดหัว" กี่ข่าวเดาจากประเทศสำนักข่าว
+        .pointLabel(d => `<div class="globe-tip"><b>${d.name || '—'}</b><br>${d.count} ข่าว${
+          d.exact === undefined ? '' :
+          (d.exact === d.count ? '<br><span class="small">· ที่เกิดเหตุจากพาดหัว</span>'
+                               : `<br><span class="small">· รู้ที่เกิดเหตุ ${d.exact}/${d.count}`
+                                 + ' (ที่เหลืออ้างจากประเทศสำนักข่าว)</span>')
+        }</div>`)
         .onPointClick(d => showPointNews(d))
         // ไอคอนธีมลอยอยู่ปลายแท่ง
         .htmlLat(d => d.lat)
@@ -372,7 +378,9 @@ routes.globe = async (app) => {
   function showPointNews(d) {
     const title = $('#newsTitle');
     if (!title) return;
-    title.textContent = `ข่าวจาก ${d.name || 'จุดที่เลือก'}`;
+    title.textContent = `ข่าวจาก ${d.name || 'จุดที่เลือก'}`
+      + (d.exact !== undefined && d.exact < d.count
+         ? ` · รู้ที่เกิดเหตุ ${d.exact}/${d.count}` : '');
     const arts = d.articles || [];
     setHTML('#worldNews', arts.length
       ? arts.map(a => `<div class="news-item"><a href="${a.url}" target="_blank" rel="noopener">${a.title}</a></div>`).join('')
