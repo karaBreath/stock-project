@@ -1,5 +1,7 @@
 # พิสูจน์ว่าลูกโลกใช้งานได้จริง — รันโค้ดจริงยิง GDELT จริง
-# จำลองการเปิดหน้า 6 ครั้ง (แต่ละครั้งยิง 1 คำ) แล้วดูว่าคลังโตขึ้นและมีจุดวาดจริงไหม
+# เกณฑ์ 2 ข้อ (ทั้งคู่ต้องผ่าน):
+#   1) เปิดหน้าต้อง "ไม่ค้าง" — ตอบภายใน 1 วินาทีเสมอ แม้ตอนคลังยังว่าง
+#   2) ตัวเก็บเบื้องหลังต้องเติมคลังจนวาดจุดได้จริง ภายในเวลาที่กำหนด
 name: globe-live
 
 on:
@@ -22,7 +24,7 @@ jobs:
           python-version: "3.11"
       - name: Install deps
         run: pip install -q requests python-dotenv flask
-      - name: จำลองเปิดหน้าลูกโลก 6 ครั้ง แล้ววัดผลจริง
+      - name: เปิดหน้าจริง + ปล่อยตัวเก็บเบื้องหลังทำงาน แล้ววัดผล
         env:
           LEARN_AUTO: "0"
           DB_PATH: /tmp/globe_live.db
@@ -33,36 +35,50 @@ jobs:
           init_db()
           from services import gdelt
 
-          rounds_with_points = 0
-          for i in range(1, 7):
+          # ---------- เกณฑ์ 1: เปิดหน้าห้ามค้าง ----------
+          print("===== 1) เปิดหน้าลูกโลก 5 ครั้ง — ต้องตอบเร็วทุกครั้ง =====")
+          slowest = 0.0
+          for i in range(1, 6):
               t0 = time.time()
               res = gdelt.all_theme_points("24h")
-              el = round(time.time() - t0, 1)
-              pts = res.get("points") or []
-              filled = [t for t in res.get("themes", []) if t.get("count")]
-              print(f"เปิดหน้าครั้งที่ {i}: {el}s | จุดบนลูกโลก={len(pts)} "
-                    f"| ธีมที่มีข้อมูล={len(filled)}/9 | ข่าวในคลัง={res.get('pool_size')}")
-              if res.get("error"):
-                  print(f"    error: {res['error']}")
-              if res.get("note"):
-                  print(f"    note: {res['note']}")
-              if pts:
-                  rounds_with_points += 1
-                  top = sorted(pts, key=lambda p: -p["count"])[:4]
-                  print("    " + " | ".join(
-                      f"{p['name']}/{p['theme']}={p['count']}" for p in top))
-              time.sleep(12)
+              el = time.time() - t0
+              slowest = max(slowest, el)
+              print(f"  ครั้งที่ {i}: {el:.2f}s | จุด={len(res.get('points') or [])} "
+                    f"| ข่าวในคลัง={res.get('pool_size')} | กำลังเก็บ={res.get('filling')}")
+              time.sleep(3)
+          fast_ok = slowest < 1.0
+          print(f"  ช้าที่สุด {slowest:.2f}s -> {'ผ่าน' if fast_ok else 'ไม่ผ่าน (ต้อง < 1.00s)'}")
 
+          # ---------- เกณฑ์ 2: ตัวเก็บเบื้องหลังต้องเติมคลังได้จริง ----------
           print()
-          print("===== รายละเอียดธีมหลังเปิด 6 ครั้ง =====")
-          final = gdelt.world_snapshot("24h", refill=False)
+          print("===== 2) รอตัวเก็บเบื้องหลังทำงาน (ดูคลังโตขึ้นทุก 15 วิ) =====")
+          deadline = time.time() + 210
+          while time.time() < deadline:
+              time.sleep(15)
+              res = gdelt.all_theme_points("24h")
+              st = res.get("filler") or {}
+              print(f"  +{int(time.time() - (deadline - 210)):>3}s | ข่าวในคลัง={res.get('pool_size'):<4}"
+                    f" จุด={len(res.get('points') or []):<3}"
+                    f" ยิงไป={st.get('tried')} สำเร็จ={st.get('ok')}"
+                    f" กำลังเก็บ={res.get('filling')}")
+              if not res.get("filling"):
+                  break
+
+          final = gdelt.all_theme_points("24h")
+          pts = final.get("points") or []
+          print()
+          print("===== รายละเอียดธีม =====")
           for t in final.get("themes", []):
               print(f"  {t['key']:<10} จุด={t['count']:<3} ข่าว={t['articles']}")
-          print(f"  ข่าวในคลังทั้งหมด: {final.get('pool_size')} "
-                f"| แยกธีมไม่ได้: {final.get('unclassified')}")
+          print(f"  ข่าวในคลัง={final.get('pool_size')} | แยกธีมไม่ได้={final.get('unclassified')}")
+          if pts:
+              top = sorted(pts, key=lambda p: -p["count"])[:6]
+              print("  จุดเด่น: " + " | ".join(f"{p['name']}/{p['theme']}={p['count']}" for p in top))
 
+          fill_ok = len(pts) >= 10
           print()
-          print(f"===== สรุป: ครั้งที่ลูกโลกมีจุดวาด {rounds_with_points}/6 =====")
-          ok = rounds_with_points >= 5 and len(final.get("points") or []) >= 10
-          print("PASS - ลูกโลกใช้งานได้จริง" if ok else "FAIL - ยังไม่ผ่านเกณฑ์")
+          print(f"===== สรุป =====")
+          print(f"  เปิดหน้าไม่ค้าง (< 1.00s)      : {'PASS' if fast_ok else 'FAIL'} (ช้าสุด {slowest:.2f}s)")
+          print(f"  เก็บข่าวจนวาดจุดได้ (>= 10 จุด) : {'PASS' if fill_ok else 'FAIL'} (ได้ {len(pts)} จุด)")
+          print("PASS - ลูกโลกใช้งานได้จริง" if (fast_ok and fill_ok) else "FAIL - ยังไม่ผ่านเกณฑ์")
           PY
