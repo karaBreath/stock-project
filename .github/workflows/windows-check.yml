@@ -1,0 +1,184 @@
+# ตรวจของที่ทำงานเฉพาะบน Windows — บนเครื่อง Linux ทดสอบไม่ได้เลย
+#
+# สามอย่างที่พังแล้วผู้ใช้จะเจอ "หาไม่เจอ เปิดไม่ได้" พอดี:
+#   1) setup.ps1 syntax ผิด -> วางบรรทัดเดียวแล้วเด้ง error ทันที
+#   2) สร้างไอคอนบนหน้าจอไม่สำเร็จ -> ไม่มีอะไรให้ดับเบิลคลิก
+#   3) หน้าต่าง tkinter เปิดไม่ขึ้น -> กดไอคอนแล้วเงียบ
+#
+# วัดบน windows-latest ของจริง ไม่ใช่เดา
+name: windows-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "setup.ps1"
+      - "gui.py"
+      - "gui.bat"
+      - "services/desktop.py"
+      - ".github/workflows/windows-check.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # -------------------------------------------------------------------
+      # ⚠️ เนื้อในของ step ที่ใช้ shell: powershell ต้องเป็น ASCII ล้วน
+      #    GitHub เขียนสคริปต์เป็นไฟล์ UTF-8 ไม่มี BOM แต่ PowerShell 5.1
+      #    อ่านไฟล์ .ps1 แบบ ANSI ข้อความไทยจะเพี้ยนเป็น à¸œà¹ˆà¸²à¸™
+      #    และไบต์ที่เพี้ยนบางตัวไปปิด string ก่อนกำหนด = syntax error ทั้ง step
+      #    (ชื่อ step ที่เป็นภาษาไทยไม่มีปัญหา เพราะไม่ได้ถูกรัน)
+      - name: "1) setup.ps1 ต้อง parse ผ่าน (ไม่งั้นวางบรรทัดเดียวแล้วพังทันที)"
+        shell: powershell
+        run: |
+          $errors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD\setup.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host "  line $($_.Extent.StartLineNumber): $($_.Message)" }
+            throw "setup.ps1 has $($errors.Count) syntax error(s)"
+          }
+          Write-Host "  setup.ps1 parses OK - $($tokens.Count) tokens"
+
+      - name: "2) gui.bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
+        shell: powershell
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("$PWD\gui.bat")
+          if ($bytes | Where-Object { $_ -gt 127 }) { throw "gui.bat contains non-ASCII bytes" }
+          $text = [IO.File]::ReadAllText("$PWD\gui.bat")
+          $crlf = ([regex]::Matches($text, "`r`n")).Count
+          $lf   = ([regex]::Matches($text, "`n")).Count
+          if ($crlf -ne $lf) { throw "gui.bat has lines not ending in CRLF" }
+          Write-Host "  gui.bat OK - $crlf CRLF lines"
+
+      # -------------------------------------------------------------------
+      - name: "3) สร้างไอคอนบนหน้าจอจริง แล้วต้องมีไฟล์ .lnk โผล่จริง"
+        shell: powershell
+        run: |
+          # Print the full result first so a failure is diagnosable in one
+          # run instead of guessing across several.
+          $env:PYTHONUTF8 = "1"
+          $env:PYTHONIOENCODING = "utf-8"
+          python -c "import json,sys; sys.path.insert(0,'.'); from services import desktop as D; r=D.create_shortcut(); print(json.dumps(r, ensure_ascii=True, indent=2))"
+          $desk = [Environment]::GetFolderPath('Desktop')
+          Write-Host "  Desktop is at: $desk"
+          $lnk = Get-ChildItem $desk -Filter *.lnk -ErrorAction SilentlyContinue
+          $lnk | ForEach-Object { Write-Host "  found: $($_.Name) ($($_.Length) bytes)" }
+          if (-not $lnk) { throw "No .lnk on the desktop - the user would have nothing to click" }
+
+          $bytes = [Text.Encoding]::UTF8.GetBytes($lnk[0].Name)
+          Write-Host "  Name bytes  : $($bytes -join ' ')"
+
+          # The shortcut must really point at gui.py, not just be an empty file
+          # sitting there looking convincing.
+          #
+          # Read it back through an ASCII COPY, never the Thai path directly.
+          # WScript.Shell converts paths to the system ANSI code page, so on a
+          # non-Thai machine it cannot find the real file -- and CreateShortcut
+          # silently hands back a BLANK new shortcut instead of failing, which
+          # reads as "every field is empty" and looks like a broken shortcut.
+          # Copy-Item is a PowerShell cmdlet and is Unicode-safe.
+          $probe = Join-Path $env:TEMP "verify-shortcut.lnk"
+          Copy-Item -LiteralPath $lnk[0].FullName -Destination $probe -Force
+          $sh = New-Object -ComObject WScript.Shell
+          $s = $sh.CreateShortcut($probe)
+          Write-Host "  TargetPath  : $($s.TargetPath)"
+          Write-Host "  Arguments   : $($s.Arguments)"
+          Write-Host "  IconLocation: $($s.IconLocation)"
+          Write-Host "  Description : $($s.Description)"
+          if ($s.Description -match '\?\?\?') {
+            throw "Description got mangled into question marks - use ASCII"
+          }
+          if ($s.Arguments -notlike "*gui.py*") { throw "Shortcut does not point at gui.py" }
+          if (-not (Test-Path $s.TargetPath))   { throw "Shortcut target does not exist" }
+          $icon = ($s.IconLocation -split ',')[0]
+          if (-not (Test-Path $icon)) { throw "Icon file does not exist" }
+          Write-Host "  Shortcut is valid in every field"
+
+      # -------------------------------------------------------------------
+      - name: "4) หน้าต่างโปรแกรมต้องเปิดขึ้นจริงบน Windows"
+        shell: bash          # ต้องใช้ bash — powershell ไม่รองรับ heredoc
+        env:
+          # Python 3.11 บน Windows ใช้ cp1252 เป็นค่าตั้งต้น
+          # ถ้าไม่บังคับ UTF-8 การ print ข้อความไทยจะโยน UnicodeEncodeError
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          pip install -q -r requirements.txt
+          pip install -q pillow
+          python -u - <<'PY'
+          import sys, time, pathlib
+          sys.path.insert(0, str(pathlib.Path.cwd()))
+          import tkinter as tk
+          import gui
+
+          root = tk.Tk()
+          app = gui.App(root)
+          root.update()          # วาดของจริง ถ้าพังจะโยนตรงนี้
+
+          w, h = root.winfo_width(), root.winfo_height()
+          print(f"  หน้าต่างเปิดได้ · ขนาด {w}x{h} · ชื่อ {root.title()!r}")
+          assert w > 300 and h > 200, "หน้าต่างเล็กผิดปกติ"
+
+          def walk(node, out):
+              for c in node.winfo_children():
+                  if c.winfo_class() == "Button":
+                      out.append(c.cget("text"))
+                  walk(c, out)
+              return out
+
+          labels = walk(root, [])
+          print(f"  ปุ่มทั้งหมด {len(labels)} ปุ่ม:")
+          for t in labels:
+              print(f"    - {t}")
+          assert len(labels) >= 9, f"ปุ่มหายไป เหลือแค่ {len(labels)}"
+
+          time.sleep(1)
+          root.update()
+          try:
+              from PIL import ImageGrab
+              x, y = root.winfo_rootx(), root.winfo_rooty()
+              img = ImageGrab.grab((x, y, x + w, y + h))
+              img.save("gui-shot.png")
+              colors = img.convert("RGB").getcolors(maxcolors=1_000_000) or []
+              print(f"  ถ่ายภาพหน้าจอได้ · {img.size} · {len(colors)} สี")
+              if len(colors) < 5:
+                  print("  !! ภาพเกือบว่างเปล่า — runner ไม่มี session จริง")
+          except Exception as e:
+              print(f"  ถ่ายภาพไม่ได้ (ไม่ใช่ข้อผิดพลาดร้ายแรง): {e}")
+
+          root.destroy()
+          print("  ผ่านทั้งหมด")
+          PY
+
+      # พิมพ์ภาพหน้าจอออกมาเป็นข้อความ เพื่อให้ดึงกลับมาดูได้จากบันทึกโดยตรง
+      # (เครื่องที่พัฒนาอยู่โหลดไฟล์แนบไม่ได้ ถ้าไม่ทำแบบนี้ก็จะไม่มีวันได้เห็น
+      #  ว่าหน้าต่างจริงหน้าตาเป็นอย่างไร)
+      - name: "5) พิมพ์ภาพหน้าจอออกมาเป็นข้อความ"
+        if: always()
+        shell: bash
+        run: |
+          if [ -f gui-shot.png ]; then
+            echo "SHOTSIZE $(wc -c < gui-shot.png)"
+            echo "SHOT_BEGIN"
+            base64 -w 200 gui-shot.png
+            echo "SHOT_END"
+          else
+            echo "no screenshot"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-screenshot
+          path: gui-shot.png
+          if-no-files-found: ignore
