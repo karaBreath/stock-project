@@ -1,5 +1,5 @@
-# พิสูจน์ว่าลูกโลกใช้งานได้จริง — รันโค้ดจริงยิง GDELT จริง แล้วนับจุดที่ได้
-# รันซ้ำ 3 รอบห่างกัน เพื่อดูว่าเสถียรจริงไม่ใช่ฟลุ๊ก
+# หาเงื่อนไขที่ GDELT ArtList ยอมรับจริง — ตัวแปรที่สงสัย: maxrecords และความกว้างของ query
+# วัดก่อนแก้ ไม่เดา
 name: globe-live
 
 on:
@@ -12,56 +12,51 @@ on:
   workflow_dispatch:
 
 jobs:
-  prove:
+  measure:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install deps
-        run: pip install -q requests python-dotenv flask
-      - name: ยิง GDELT จริง 3 รอบ แล้วนับจุดบนลูกโลก
-        env:
-          LEARN_AUTO: "0"
-          DB_PATH: /tmp/globe_live.db
+      - name: วัดว่า ArtList รับ maxrecords / query แบบไหนได้
         run: |
-          python - <<'PY'
-          import time
-          from database import init_db
-          init_db()
-          from services import gdelt
+          UA="NEBULA-Stock-App/1.0 (educational stock research)"
+          B="https://api.gdeltproject.org/api/v2/doc/doc"
+          probe () {
+            printf '%-46s' "$1"
+            out=$(curl -sS -m 45 -A "$UA" -w '|HTTP=%{http_code}|T=%{time_total}s|SZ=%{size_download}' "$2" 2>&1)
+            code=$(echo "$out" | grep -o 'HTTP=[0-9]*' | tail -1)
+            tim=$(echo "$out" | grep -o 'T=[0-9.]*s' | tail -1)
+            sz=$(echo "$out" | grep -o 'SZ=[0-9]*' | tail -1)
+            n=$(echo "$out" | grep -o '"url"' | wc -l)
+            echo " $code $tim $sz | ข่าวที่ได้=$n"
+            sleep 10
+          }
+          echo "===== A) คำเดียว เปลี่ยน maxrecords ====="
+          probe "inflation maxrecords=5"    "$B?query=inflation&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          probe "inflation maxrecords=50"   "$B?query=inflation&mode=ArtList&format=json&maxrecords=50&timespan=24h"
+          probe "inflation maxrecords=100"  "$B?query=inflation&mode=ArtList&format=json&maxrecords=100&timespan=24h"
+          probe "inflation maxrecords=250"  "$B?query=inflation&mode=ArtList&format=json&maxrecords=250&timespan=24h"
 
-          ok_rounds = 0
-          for i in range(1, 4):
-              t0 = time.time()
-              res = gdelt.all_theme_points("24h")
-              el = round(time.time() - t0, 1)
-              pts = res.get("points") or []
-              filled = [t for t in res.get("themes", []) if t.get("count")]
-              print(f"--- รอบ {i}: {el}s | ok={res.get('ok')} | จุด={len(pts)} "
-                    f"| ธีมที่มีข้อมูล={len(filled)}/{len(res.get('themes', []))} "
-                    f"| ข่าวที่อ่าน={res.get('articles_seen')} "
-                    f"| แยกธีมไม่ได้={res.get('unclassified')}")
-              if res.get("error"):
-                  print(f"    error: {res['error']}")
-              if res.get("note"):
-                  print(f"    note: {res['note']}")
-              for t in res.get("themes", []):
-                  print(f"      {t['key']:<10} จุด={t['count']:<3} ข่าว={t.get('articles', 0)}")
-              top = sorted(pts, key=lambda p: -p["count"])[:6]
-              for p in top:
-                  print(f"      TOP {p['name']:<18} {p['theme']:<10} {p['count']} ข่าว")
-              if pts:
-                  ok_rounds += 1
-              # รอบ 2-3 ล้าง cache เพื่อบังคับให้ยิงใหม่จริง (พิสูจน์ว่าไม่ได้อาศัย cache)
-              if i < 3:
-                  from database import execute
-                  execute("DELETE FROM cache WHERE key LIKE 'gdelt:snap:%'")
-                  time.sleep(20)
+          echo
+          echo "===== B) หลายคำ OR เปลี่ยน maxrecords ====="
+          Q3="%28inflation%20OR%20tariff%20OR%20semiconductor%29"
+          probe "3 คำ OR maxrecords=5"      "$B?query=$Q3&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          probe "3 คำ OR maxrecords=50"     "$B?query=$Q3&mode=ArtList&format=json&maxrecords=50&timespan=24h"
+          probe "3 คำ OR maxrecords=250"    "$B?query=$Q3&mode=ArtList&format=json&maxrecords=250&timespan=24h"
 
-          print()
-          print(f"===== สรุป: รอบที่ได้จุดบนลูกโลก {ok_rounds}/3 =====")
-          print("PASS" if ok_rounds >= 2 else "FAIL - ลูกโลกยังไม่เสถียร")
-          PY
+          echo
+          echo "===== C) query รวม 9 ธีมของเรา ====="
+          Q9="%28%22stock%20market%22%20OR%20inflation%20OR%20tariff%20OR%20semiconductor%20OR%20%22oil%20price%22%20OR%20war%20OR%20earthquake%20OR%20earnings%20OR%20Thailand%29"
+          probe "9 ธีม maxrecords=5"        "$B?query=$Q9&mode=ArtList&format=json&maxrecords=5&timespan=24h"
+          probe "9 ธีม maxrecords=50"       "$B?query=$Q9&mode=ArtList&format=json&maxrecords=50&timespan=24h"
+          probe "9 ธีม maxrecords=250"      "$B?query=$Q9&mode=ArtList&format=json&maxrecords=250&timespan=24h"
+
+          echo
+          echo "===== D) ไม่ระบุ maxrecords / ไม่ระบุ sort ====="
+          probe "inflation ไม่ระบุ maxrecords" "$B?query=inflation&mode=ArtList&format=json&timespan=24h"
+          probe "inflation + sort=DateDesc"    "$B?query=inflation&mode=ArtList&format=json&maxrecords=50&timespan=24h&sort=DateDesc"
+
+          echo
+          echo "===== E) ยิงคำเดียว maxrecords=50 ซ้ำ 4 ครั้งห่าง 10 วิ (วัดความเสถียร) ====="
+          for w in economy market trade energy; do
+            probe "ซ้ำ: $w maxrecords=50" "$B?query=$w&mode=ArtList&format=json&maxrecords=50&timespan=24h"
+          done
