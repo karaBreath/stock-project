@@ -41,3 +41,6 @@ logs/
 
 # pytest
 .pytest_cache/
+
+# cloudflared ที่โหลดมาอัตโนมัติ (ไบนารี ~35MB ไม่ควรอยู่ใน git)
+tools/
