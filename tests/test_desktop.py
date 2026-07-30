@@ -97,6 +97,89 @@ def test_falls_back_to_home_desktop_if_windows_does_not_answer(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 2.5) อ่านผลจาก PowerShell โดยไม่พังเรื่อง encoding
+#
+# บั๊กจริงที่ CI ของ Windows จับได้:
+#   subprocess.run(..., text=True) ถอดรหัสด้วย code page ของเครื่อง (cp1252)
+#   พอเจอไบต์ 0x81 ที่ code page ไม่รู้จัก เธรดอ่านผลตายทั้งเธรด
+#   ผลลัพธ์เป็นค่าว่าง แล้วโปรแกรมสรุปว่า "สร้างไอคอนไม่สำเร็จ"
+#   ผู้ใช้เห็นแค่ว่ากดแล้วไม่มีอะไรเกิดขึ้น
+# ---------------------------------------------------------------------------
+def test_survives_output_the_windows_code_page_cannot_decode(monkeypatch):
+    class R:
+        returncode = 0
+        stdout = b"C:\\Users\\\x81\x9d\\Desktop"   # ไบต์ที่ cp1252 ถอดไม่ได้
+        stderr = b""
+
+    monkeypatch.setattr(D.subprocess, "run", lambda *a, **k: R())
+    code, out, err = D.ps_run("whatever")          # ต้องไม่โยน
+    assert code == 0 and "Desktop" in out
+
+
+def test_never_hands_decoding_to_the_locale_code_page(monkeypatch):
+    """
+    ถ้าเผลอใส่ text=True กลับเข้ามาอีก บั๊กเดิมจะกลับมาทันที
+    ต้องรับเป็นไบต์แล้วถอดเป็น UTF-8 เองเสมอ
+    """
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    monkeypatch.setattr(D.subprocess, "run",
+                        lambda cmd, **kw: (seen.update(kw=kw, cmd=cmd), R())[1])
+    D.ps_run("x")
+    assert not seen["kw"].get("text"), "ห้ามใช้ text=True กับ PowerShell"
+    assert seen["kw"].get("capture_output") is True
+
+
+def test_forces_powershell_to_speak_utf8(monkeypatch):
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    monkeypatch.setattr(D.subprocess, "run",
+                        lambda cmd, **kw: (seen.update(cmd=cmd), R())[1])
+    D.ps_run("Get-Thing")
+    assert "OutputEncoding" in " ".join(seen["cmd"])
+
+
+def test_reports_the_real_powershell_error_not_a_blank_one(monkeypatch, tmp_path):
+    """
+    เวลาพัง ต้องได้ข้อความจริงจาก PowerShell ไม่ใช่ประโยคกว้าง ๆ
+    ไม่งั้นแก้ปัญหาต่อไม่ได้เลย
+    """
+    monkeypatch.setattr(D, "IS_WIN", True)
+    monkeypatch.setattr(D, "desktop_dir", lambda: tmp_path)
+    monkeypatch.setattr(D, "ensure_icon", lambda: tmp_path / "app.ico")
+
+    class R:
+        returncode = 1
+        stdout = "FAILED: The system cannot find the path specified.".encode()
+        stderr = b""
+
+    monkeypatch.setattr(D.subprocess, "run", lambda *a, **k: R())
+    res = D.create_shortcut()
+    assert res["ok"] is False
+    assert "cannot find the path" in res["error"]
+
+
+def test_shortcut_script_reports_failures_instead_of_dying_silently():
+    ps = D.shortcut_script(__import__("pathlib").Path("a.lnk"),
+                           __import__("pathlib").Path("p.exe"), '"g.py"',
+                           __import__("pathlib").Path("."),
+                           __import__("pathlib").Path("i.ico"))
+    assert "try {" in ps and "catch" in ps
+    assert "FAILED" in ps and "SAVED" in ps
+    assert "exit 1" in ps, "ต้องคืน exit code ที่ไม่ใช่ 0 เวลาพัง"
+
+
+# ---------------------------------------------------------------------------
 # 3) คำสั่งสร้างทางลัด
 # ---------------------------------------------------------------------------
 def test_shortcut_command_has_every_field_windows_needs(tmp_path):

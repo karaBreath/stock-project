@@ -61,6 +61,36 @@ def ensure_icon() -> Path:
 # ---------------------------------------------------------------------------
 # ทางลัดบนหน้าจอ
 # ---------------------------------------------------------------------------
+UTF8_PREFIX = "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+
+
+def ps_run(ps: str, timeout: int = 60):
+    """
+    เรียก PowerShell แล้วอ่านผลกลับมาโดยไม่พังเรื่อง encoding
+
+    ⚠️ ห้ามใช้ text=True เฉย ๆ เด็ดขาด
+    บน Windows Python จะถอดรหัสผลลัพธ์ด้วย code page ของเครื่อง (เช่น cp1252)
+    ถ้าเจอไบต์ที่ code page นั้นไม่รู้จัก เธรดที่อ่านผลจะตายทั้งเธรด
+    ผลลัพธ์กลายเป็นค่าว่าง แล้วเราจะสรุปว่า "สร้างไอคอนไม่สำเร็จ"
+    ทั้งที่ความจริงคืออ่านคำตอบไม่ออกเท่านั้น — เจอมาแล้วใน CI ของ Windows จริง
+
+    ทางแก้: บังคับให้ PowerShell พ่นออกมาเป็น UTF-8 แล้วเราถอดเป็น UTF-8
+    พร้อม errors='replace' กันไว้อีกชั้นไม่ให้มีทางพังได้เลย
+    """
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-Command", UTF8_PREFIX + ps],
+        capture_output=True, timeout=timeout)
+    def _dec(b):
+        if b is None:
+            return ""
+        if isinstance(b, str):        # เผื่อถูก monkeypatch ในเทสต์
+            return b
+        return b.decode("utf-8", "replace")
+    return (getattr(r, "returncode", 0), _dec(getattr(r, "stdout", b"")),
+            _dec(getattr(r, "stderr", b"")))
+
+
 def desktop_dir() -> Path:
     """
     หาโฟลเดอร์หน้าจอจริง ๆ
@@ -71,11 +101,9 @@ def desktop_dir() -> Path:
     """
     if IS_WIN:
         try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "[Environment]::GetFolderPath('Desktop')"],
-                capture_output=True, text=True, timeout=20)
-            path = (r.stdout or "").strip()
+            _, out, _ = ps_run("[Environment]::GetFolderPath('Desktop')",
+                               timeout=20)
+            path = out.strip().splitlines()[0].strip() if out.strip() else ""
             if path:
                 return Path(path)
         except Exception:
@@ -88,12 +116,17 @@ def _ps_quote(s) -> str:
     return "'" + str(s).replace("'", "''") + "'"
 
 
-def shortcut_command(link: Path, target: Path, args: str, workdir: Path,
-                     icon: Path) -> list:
+def shortcut_script(link: Path, target: Path, args: str, workdir: Path,
+                    icon: Path) -> str:
     """
-    คำสั่งสร้างไฟล์ .lnk ผ่าน PowerShell — ไม่ต้องลงไลบรารีเสริมใด ๆ
+    สคริปต์ PowerShell ที่สร้างไฟล์ .lnk — ไม่ต้องลงไลบรารีเสริมใด ๆ
+
+    ห่อด้วย try/catch แล้วพ่นข้อความจริงออกมา ไม่งั้นเวลาพังจะได้แค่
+    exit code เปล่า ๆ ซึ่งบอกอะไรไม่ได้เลยว่าติดตรงไหน
     """
-    ps = (
+    return (
+        "$ErrorActionPreference='Stop';"
+        "try {"
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
         f"{_ps_quote(link)});"
         f"$s.TargetPath = {_ps_quote(target)};"
@@ -101,9 +134,18 @@ def shortcut_command(link: Path, target: Path, args: str, workdir: Path,
         f"$s.WorkingDirectory = {_ps_quote(workdir)};"
         f"$s.IconLocation = {_ps_quote(icon)};"
         f"$s.Description = {_ps_quote(APP_NAME)};"
-        "$s.Save()"
+        "$s.Save();"
+        "Write-Output 'SAVED'"
+        "} catch { Write-Output ('FAILED: ' + $_.Exception.Message); exit 1 }"
     )
-    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
+
+
+def shortcut_command(link: Path, target: Path, args: str, workdir: Path,
+                     icon: Path) -> list:
+    """คำสั่งเต็มสำหรับเรียก PowerShell (แยกไว้เพื่อให้ทดสอบได้)"""
+    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-Command",
+            UTF8_PREFIX + shortcut_script(link, target, args, workdir, icon)]
 
 
 def python_target() -> tuple:
@@ -139,16 +181,19 @@ def create_shortcut() -> dict:
 
     target, quiet = python_target()
     link = desktop_dir() / f"{APP_NAME}.lnk"
-    cmd = shortcut_command(link, target, f'"{BASE / "gui.py"}"', BASE, icon)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        code, out, err = ps_run(
+            shortcut_script(link, target, f'"{BASE / "gui.py"}"', BASE, icon))
     except Exception as e:
         return {"ok": False, "error": f"เรียก PowerShell ไม่สำเร็จ: {e}"}
 
-    if r.returncode != 0 or not link.exists():
+    if code != 0 or not link.exists():
+        detail = " / ".join(p for p in ((err or "").strip(),
+                                        (out or "").strip()) if p)
         return {"ok": False,
-                "error": ((r.stderr or r.stdout or "").strip()[-300:]
-                          or "สร้างไฟล์ทางลัดไม่สำเร็จ")}
+                "error": (detail[-400:] if detail
+                          else f"สร้างไฟล์ทางลัดไม่สำเร็จ (exit {code}, "
+                               f"ไม่พบไฟล์ที่ {link})")}
     return {
         "ok": True,
         "path": str(link),
