@@ -686,3 +686,17 @@ def test_point_reports_how_many_locations_are_certain(monkeypatch):
     assert "Strait of Hormuz" in by_name
     assert by_name["Strait of Hormuz"]["exact"] == 1
     assert by_name.get("United States", {}).get("exact") == 0
+
+
+@pytest.mark.parametrize("title,source,expect", [
+    # ชื่อที่พ้องกับคำอื่น ต้องไม่ลากจุดไปผิดที่
+    ("Georgia recount stirs political fight", "United States", "United States"),
+    ("Michael Jordan backs new sports venture", "United States", "United States"),
+    ("Turkey prices climb before the holiday", "United States", "United States"),
+    # แต่ถ้า GDELT บอกมาเองว่าสำนักข่าวอยู่ประเทศนั้น ต้องใช้ได้ปกติ
+    ("Central bank holds rates", "Turkey", "Turkey"),
+])
+def test_ambiguous_names_do_not_move_the_point(title, source, expect):
+    name, pos, how = G._location_of({"title": title, "sourcecountry": source})
+    assert name == expect, f"'{title}' ควรอยู่ที่ {expect} แต่ได้ {name}"
+    assert pos is not None

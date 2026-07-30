@@ -18,6 +18,7 @@ jobs:
   prove:
     runs-on: ubuntu-latest
     continue-on-error: true
+    timeout-minutes: 14        # ห้ามค้างไม่รู้จบ (เจอจริง: รอบก่อนค้าง 24 นาที)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,8 +31,10 @@ jobs:
           LEARN_AUTO: "0"
           DB_PATH: /tmp/globe_live.db
         run: |
-          python - <<'PY'
-          import time
+          # -u = ไม่บัฟเฟอร์ผลลัพธ์ · faulthandler จะพิมพ์ stack ตอนค้างให้เห็นว่าค้างที่บรรทัดไหน
+          python -u - <<'PY'
+          import faulthandler, time
+          faulthandler.dump_traceback_later(660, exit=True)
           from database import init_db
           init_db()
           from services import gdelt
@@ -52,7 +55,7 @@ jobs:
           print()
           print("===== 2) รอตัวเก็บเบื้องหลัง (ดูคลังและความครอบคลุมโตขึ้น) =====")
           start = time.time()
-          while time.time() - start < 420:
+          while time.time() - start < 330:
               time.sleep(20)
               res = gdelt.all_theme_points("24h")
               st = res.get("filler") or {}

@@ -153,13 +153,26 @@ def place_coords(name: str):
     return PLACES.get((name or "").strip())
 
 
-def all_names() -> dict:
+# ชื่อประเทศที่ "พ้องกับคำอื่น" — ห้ามใช้จับที่เกิดเหตุจากพาดหัว เพราะปักผิดง่าย
+#   Georgia   = รัฐในอเมริกา (ข่าวเลือกตั้งจอร์เจียจะไปโผล่แถบคอเคซัส)
+#   Jordan    = ชื่อคน · Turkey = ไก่งวง · Chad/Mali/Niger/Guinea = ชื่อคน/คำทั่วไป
+# ยังใช้ได้ปกติเมื่อมาจากช่อง sourcecountry ของ GDELT (ตรงนั้นเป็นชื่อประเทศแน่นอน)
+AMBIGUOUS_IN_HEADLINE = frozenset({
+    "Georgia", "Jordan", "Turkey", "Chad", "Mali", "Niger", "Guinea",
+    "Cyprus", "Congo", "Union", "Sudan",
+})
+
+
+def all_names(for_headline: bool = False) -> dict:
     """ชื่อทุกแบบที่รู้จัก -> (lat, lon) · ใช้สร้างตัวจับชื่อสถานที่จากพาดหัว"""
     out = dict(PLACES)
     out.update(COUNTRY_COORDS)
     for alias, real in ALIASES.items():
         if real in COUNTRY_COORDS and len(alias) > 3:   # 'US'/'UK' สั้นเกิน เจอผิดง่าย
             out[alias] = COUNTRY_COORDS[real]
+    if for_headline:
+        for name in AMBIGUOUS_IN_HEADLINE:
+            out.pop(name, None)
     return out
 
 

@@ -482,7 +482,7 @@ def _place_matcher():
     """
     if _PLACE_RX[0] is not None:
         return _PLACE_RX
-    names = country_geo.all_names()
+    names = country_geo.all_names(for_headline=True)
     ordered = sorted(names, key=len, reverse=True)
     lookup = {n.lower(): n for n in ordered}
     rx = re.compile(r"(?<![a-z0-9])(" +
