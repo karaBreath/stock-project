@@ -102,13 +102,29 @@ URL_THEME = (
 )
 
 
-def _theme_of(root: str, url: str) -> str:
-    """ธีมจากลิงก์ข่าวก่อน (ชัดกว่า) แล้วค่อยถอยไปใช้รหัสเหตุการณ์ CAMEO"""
+# QuadClass ของ CAMEO — ตัวแบ่งหยาบ ๆ ที่ GDELT ให้มาในคอลัมน์ 29
+#   1 = ร่วมมือด้วยวาจา · 2 = ร่วมมือเป็นรูปธรรม
+#   3 = ขัดแย้งด้วยวาจา (ข่มขู่/ประณาม/ปฏิเสธ) · 4 = ขัดแย้งเป็นรูปธรรม (ปะทะ/โจมตี)
+# ใช้ตัวนี้แยก "ขัดแย้ง" ออกจาก "การทูต" ได้ตรงกว่า EventRootCode มาก
+# (ไม่ใช้แล้วจะเห็นทุกจุดเป็นสีเดียว เพราะรหัส 01-12 กินสัดส่วนเกือบทั้งหมด)
+QUAD_THEME = {"1": "geopolitics", "2": "geopolitics",
+              "3": "conflict", "4": "conflict"}
+
+
+def _theme_of(root: str, url: str, quad: str = "") -> str:
+    """
+    ธีมจากลิงก์ข่าวก่อน (ชัดกว่าเพราะดูเนื้อข่าวจริง)
+    ถ้าลิงก์ไม่บอกอะไร ใช้ QuadClass แยกขัดแย้ง/การทูต
+    แล้วค่อยถอยไปใช้ EventRootCode เป็นทางสุดท้าย
+    """
     u = (url or "").lower()
     for theme, words in URL_THEME:
         if any(w in u for w in words):
             return theme
-    return ROOT_THEME.get((root or "").zfill(2), "market")
+    by_quad = QUAD_THEME.get((quad or "").strip())
+    if by_quad:
+        return by_quad
+    return ROOT_THEME.get((root or "").zfill(2), "geopolitics")
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +222,7 @@ def fetch_slice(url: str, sess=None) -> list:
             "mentions": mentions,
             "tone": round(tone, 2),
             "url": url_,
-            "theme": _theme_of(row[C_ROOT], url_),
+            "theme": _theme_of(row[C_ROOT], url_, row[C_QUAD]),
             "_t": now,
         })
     return out
