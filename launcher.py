@@ -113,9 +113,17 @@ def ensure_env():
     if example.exists():
         shutil.copyfile(example, env)
         say("[3/4] สร้างไฟล์ .env ให้อัตโนมัติ")
-        say("      ตั้งให้เชื่อมระบบเทรด MT5 ที่ 127.0.0.1:8641 ไว้แล้ว")
     else:
-        say("[3/4] ไม่มี .env.example — ใช้ค่าเริ่มต้นในโค้ด (ยังรันได้ปกติ)")
+        # กันกรณีไฟล์ตัวอย่างหาย — เขียนค่าที่จำเป็นเองเลย ไม่ปล่อยให้ฟีเจอร์หาย
+        env.write_text(
+            "PORT=5000\n"
+            "VE_BASE_URL=http://127.0.0.1:8641\n"
+            "VE_AUTH_KEY=\n"
+            "LEARN_AUTO=1\n"
+            "LEARN_INTERVAL=3600\n",
+            encoding="utf-8")
+        say("[3/4] ไม่พบ .env.example — สร้าง .env จากค่าเริ่มต้นให้แล้ว")
+    say("      ตั้งให้เชื่อมระบบเทรด MT5 ที่ 127.0.0.1:8641 ไว้แล้ว")
 
 
 def open_browser_when_ready():
