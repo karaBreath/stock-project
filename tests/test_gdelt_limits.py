@@ -70,8 +70,13 @@ def test_fetch_never_requests_more_than_90_days(monkeypatch):
     assert sent["timespan"] == "90d"
 
 
-def test_429_triggers_cooldown_and_stops_hammering(monkeypatch):
-    """โดน 429 จนหมดโควตาลองใหม่ -> ต้องเข้าโหมดพัก ไม่ยิงซ้ำทันที"""
+def test_during_cooldown_no_requests_are_sent(monkeypatch):
+    """
+    ระหว่างพัก ต้องไม่ยิงออกไปเลยแม้แต่ครั้งเดียว
+
+    หมายเหตุ: การ "เข้าสู่โหมดพัก" ต้องล้มติดกันหลายครั้งก่อน (ดูเทสข้อ 6)
+    ล้มครั้งเดียวแล้วพักทั้งระบบเป็นบั๊กที่เคยทำให้ลูกโลกว่างเปล่า
+    """
     calls = {"n": 0}
 
     class Resp429:
@@ -79,23 +84,20 @@ def test_429_triggers_cooldown_and_stops_hammering(monkeypatch):
         text = "rate limited"
         def json(self): return {}
 
-    def fake_get(url, params=None, timeout=None, headers=None):
-        calls["n"] += 1
-        return Resp429()
+    monkeypatch.setattr(G.requests, "get",
+                        lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1), Resp429())[1])
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_throttle", _REAL_THROTTLE)
 
-    monkeypatch.setattr(G.requests, "get", fake_get)
-    monkeypatch.setattr(G.time, "sleep", lambda s: None)   # ไม่ต้องรอจริง
-    monkeypatch.setattr(G, "_throttle", _REAL_THROTTLE)    # ใช้ของจริงเพื่อทดสอบคูลดาวน์
+    G._fail_streak[0] = 0
+    G._cooldown_until[0] = G.time.time() + 60          # จำลองว่ากำลังพักอยู่
+    assert G.in_cooldown() is True and G.cooldown_left() > 0
+
+    assert G._fetch_json("doc/doc", {"query": "x"}) is None
+    assert calls["n"] == 0, "ระหว่างพักต้องไม่ยิงเน็ตเลย"
+
     G._cooldown_until[0] = 0.0
-
-    assert G._fetch_json("doc/doc", {"query": "x"}, retries=1) is None
-    assert calls["n"] == 2                                  # ลอง 2 ครั้งแล้วหยุด
-    assert G._cooldown_until[0] > 0                         # เข้าโหมดพักแล้ว
-
-    before = calls["n"]
-    assert G._fetch_json("doc/doc", {"query": "x"}) is None  # ระหว่างพัก
-    assert calls["n"] == before                             # ต้องไม่ยิงเพิ่มเลย
-    G._cooldown_until[0] = 0.0
+    G._fail_streak[0] = 0
 
 
 # ---------------------------------------------------------------------------
@@ -301,3 +303,120 @@ def test_backfill_rotates_themes_and_stays_gentle(monkeypatch):
 def test_backfill_survives_no_themes(monkeypatch):
     monkeypatch.setattr(G.Config, "WORLD_THEMES", {})
     assert G.backfill()["themes"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 6) ล้มครั้งเดียวห้ามทำให้ทั้งระบบหยุด + ต้องมีของสำรองแสดงแทนหน้าว่าง
+#    (บั๊กจริงจากเครื่องผู้ใช้: ธีมแรกโดน 429 -> พัก 45 วิ -> อีก 8 ธีมถูกข้าม
+#     ลูกโลกจึงว่างเปล่าทั้งที่ GDELT แค่งอแงชั่วคราว)
+# ---------------------------------------------------------------------------
+def test_single_failure_does_not_freeze_everything(monkeypatch):
+    calls = {"n": 0}
+
+    class Resp429:
+        status_code = 429
+        text = "rate limited"
+        def json(self): return {}
+
+    class RespOK:
+        status_code = 200
+        text = "{}"
+        def json(self): return {"ok": True}
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        calls["n"] += 1
+        return Resp429() if calls["n"] == 1 else RespOK()
+
+    monkeypatch.setattr(G.requests, "get", fake_get)
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_throttle", _REAL_THROTTLE)
+    G._cooldown_until[0] = 0.0
+    G._fail_streak[0] = 0
+
+    assert G._fetch_json("doc/doc", {"query": "a"}, retries=0) is None   # ล้มครั้งที่ 1
+    assert G.in_cooldown() is False, "ล้มครั้งเดียวต้องยังไม่พัก"
+    assert G._fetch_json("doc/doc", {"query": "b"}, retries=0) == {"ok": True}
+    assert G._fail_streak[0] == 0, "สำเร็จแล้วต้องรีเซ็ตตัวนับ"
+
+
+def test_cooldown_only_after_repeated_failures(monkeypatch):
+    class Resp429:
+        status_code = 429
+        text = "rate limited"
+        def json(self): return {}
+
+    monkeypatch.setattr(G.requests, "get", lambda *a, **k: Resp429())
+    monkeypatch.setattr(G.time, "sleep", lambda s: None)
+    monkeypatch.setattr(G, "_throttle", _REAL_THROTTLE)
+    G._cooldown_until[0] = 0.0
+    G._fail_streak[0] = 0
+
+    for i in range(G._FAILS_BEFORE_COOLDOWN - 1):
+        G._fetch_json("doc/doc", {"query": f"q{i}"}, retries=0)
+        assert G.in_cooldown() is False, f"ล้ม {i+1} ครั้งยังไม่ควรพัก"
+    G._fetch_json("doc/doc", {"query": "last"}, retries=0)
+    assert G.in_cooldown() is True, "ล้มครบเกณฑ์แล้วต้องพัก"
+    G._cooldown_until[0] = 0.0
+    G._fail_streak[0] = 0
+
+
+def test_globe_falls_back_to_last_good_data(monkeypatch):
+    """ดึงสดไม่ได้ -> ต้องแสดงของล่าสุดที่เคยได้ ไม่ใช่หน้าว่าง"""
+    store = {}
+    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
+
+    good = {"articles": [{"title": "T", "url": "http://t", "sourcecountry": "Japan"}]}
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: good)
+    first = G.world_points(theme="market", timespan="24h")
+    assert first["ok"] and first["points"] and not first.get("stale")
+
+    store.pop("gdelt:geo2:market:" + first["query"] + ":24h", None)   # cache สดหมดอายุ
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)       # แล้วดึงสดล้ม
+
+    second = G.world_points(theme="market", timespan="24h")
+    assert second["points"] == first["points"], "ต้องได้จุดเดิมกลับมา"
+    assert second["stale"] is True and second.get("note")
+
+
+def test_globe_still_reports_error_when_nothing_cached(monkeypatch):
+    monkeypatch.setattr(G, "cache_get", lambda k: None)
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
+    res = G.world_points(theme="market")
+    assert res["ok"] is False and res.get("error") and not res.get("stale")
+
+
+def test_timeline_falls_back_to_last_good(monkeypatch):
+    store = {}
+    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: {
+        "timeline": [{"series": "Average Tone",
+                      "data": [{"date": "20260730T000000Z", "value": -1.2}]}]})
+
+    a = G.tone_timeline("q", timespan="30d")
+    assert a["ok"] and a["series"]
+
+    store.pop("gdelt:tone:q:30d", None)
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
+    b = G.tone_timeline("q", timespan="30d")
+    assert b["series"] == a["series"] and b["stale"] is True
+
+
+def test_all_themes_reports_stale_count(monkeypatch):
+    store = {}
+    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: {
+        "articles": [{"title": "x", "url": "http://x", "sourcecountry": "France"}]})
+    G.all_theme_points()                                  # เก็บของดีไว้ก่อน
+
+    for k in [k for k in store if not k.endswith(":last")]:
+        store.pop(k)                                      # cache สดหมดอายุทุกธีม
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
+
+    res = G.all_theme_points()
+    assert res["stale_themes"] == len(G.Config.WORLD_THEMES)
+    assert res["skipped_themes"] == 0 and res["points"]    # ยังมีจุดให้วาด
+    assert "เก็บไว้ก่อนหน้า" in res["note"]

@@ -39,10 +39,15 @@ MAX_TIMESPAN_DAYS = 90
 # GDELT จำกัดอัตราการเรียกต่อ IP ค่อนข้างแรง (เจอ 429 บ่อยจากเซิร์ฟเวอร์ cloud)
 # จึงบังคับเว้นจังหวะระหว่างการเรียกทุกครั้ง + พักยาวเมื่อโดน 429 ติด ๆ กัน
 _MIN_GAP_SEC = 1.2
-_COOLDOWN_SEC = 45
+_COOLDOWN_SEC = 30
+# พักเฉพาะเมื่อ "ล้มติดกันหลายครั้ง" — ล้มครั้งเดียวห้ามทำให้ทั้งระบบหยุด
+# (บั๊กที่เจอจริง: ล้ม 1 ครั้ง -> พัก 45 วิ -> ธีมที่เหลืออีก 8 ธีมถูกข้ามหมด
+#  ลูกโลกจึงว่างเปล่าทั้งที่ GDELT แค่งอแงชั่วคราว)
+_FAILS_BEFORE_COOLDOWN = 3
 _rate_lock = threading.Lock()
 _last_call = [0.0]
 _cooldown_until = [0.0]
+_fail_streak = [0]
 
 
 def _clamp_timespan(timespan: str) -> str:
@@ -114,15 +119,26 @@ def _fetch_json(path: str, params: dict, retries: int = 1, timeout: int = None):
                              timeout=timeout or Config.GDELT_TIMEOUT,
                              headers={"User-Agent": _UA})
             if r.status_code == 200 and r.text.strip():
+                with _rate_lock:
+                    _fail_streak[0] = 0     # สำเร็จแล้ว รีเซ็ตตัวนับ
                 return r.json()
             if r.status_code == 429 and attempt == retries:
-                with _rate_lock:            # โดนซ้ำจนหมดโควตาลอง -> พักยาว
-                    _cooldown_until[0] = time.time() + _COOLDOWN_SEC
+                _note_failure()
         except Exception:
-            pass
+            if attempt == retries:
+                _note_failure()
         if attempt < retries:
             time.sleep(2.0 * (attempt + 1))
     return None
+
+
+def _note_failure():
+    """นับความล้มเหลวต่อเนื่อง — พักก็เมื่อล้มติดกันจนแน่ใจว่าโดนจำกัดจริง"""
+    with _rate_lock:
+        _fail_streak[0] += 1
+        if _fail_streak[0] >= _FAILS_BEFORE_COOLDOWN:
+            _cooldown_until[0] = time.time() + _COOLDOWN_SEC
+            _fail_streak[0] = 0
 
 
 def _day_of(stamp: str) -> str:
@@ -174,6 +190,14 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
 
     arts = (data or {}).get("articles") or []
     if not arts:
+        # ดึงสดไม่ได้ -> ใช้ของล่าสุดที่เคยได้ ดีกว่าโชว์หน้าว่าง
+        stale = cache_get(cache_key + ":last")
+        if stale and stale.get("points"):
+            stale = dict(stale)
+            stale["stale"] = True
+            stale["note"] = (f"ดึงสดไม่ได้ตอนนี้ — แสดงข้อมูลที่เก็บไว้เมื่อ "
+                             f"{stale.get('fetched_at', 'ก่อนหน้านี้')}")
+            return stale
         out["error"] = (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
                         if in_cooldown() else
                         "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)")
@@ -183,8 +207,10 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     out["ok"] = bool(out["points"])
     out["total"] = len(out["points"])
     out["articles_seen"] = len(arts)
+    out["fetched_at"] = dt.datetime.now().isoformat(timespec="minutes")
     if out["ok"]:
         cache_set(cache_key, out, Config.GDELT_CACHE_TTL)
+        cache_set(cache_key + ":last", out, LAST_GOOD_TTL)   # สำรองไว้ใช้ตอนดึงไม่ได้
     return out
 
 
@@ -246,10 +272,12 @@ def all_theme_points(timespan: str = "24h") -> dict:
     """
     themes = []
     points = []
-    skipped = 0
+    skipped = stale_count = 0
     for key in Config.WORLD_THEMES:
         res = world_points(theme=key, timespan=timespan)
-        if not res.get("ok"):
+        if res.get("stale"):
+            stale_count += 1
+        if not res.get("ok") and not res.get("points"):
             skipped += 1
         themes.append({
             "key": key,
@@ -263,10 +291,16 @@ def all_theme_points(timespan: str = "24h") -> dict:
             points.append(p)
     out = {"themes": themes, "points": points, "timespan": timespan,
            "ok": bool(points), "skipped_themes": skipped,
+           "stale_themes": stale_count,
            "fetched_at": dt.datetime.now().isoformat(timespec="seconds")}
+    notes = []
+    if stale_count:
+        notes.append(f"{stale_count} ธีมแสดงข้อมูลที่เก็บไว้ก่อนหน้า (ดึงสดไม่ได้ตอนนี้)")
     if skipped:
-        out["note"] = (f"{skipped} ธีมยังดึงไม่ได้ (GDELT จำกัดอัตราการเรียก) "
-                       "— ลองใหม่อีกครั้งในอีกสักครู่")
+        notes.append(f"{skipped} ธีมยังไม่มีข้อมูลเลย — GDELT จำกัดอัตราการเรียก "
+                     "ระบบจะทยอยเก็บให้เอง")
+    if notes:
+        out["note"] = " · ".join(notes)
     return out
 
 
@@ -307,9 +341,17 @@ def _timeline(query: str, mode: str, timespan: str, tag: str) -> dict:
     if series:
         out["series"] = series
         out["ok"] = True
+        out["fetched_at"] = dt.datetime.now().isoformat(timespec="minutes")
         cache_set(cache_key, out, Config.GDELT_TIMELINE_CACHE_TTL)
-    else:
-        out["error"] = "ดึง timeline จาก GDELT ไม่ได้"
+        cache_set(cache_key + ":last", out, LAST_GOOD_TTL)
+        return out
+
+    stale = cache_get(cache_key + ":last")
+    if stale and stale.get("series"):
+        stale = dict(stale)
+        stale["stale"] = True
+        return stale
+    out["error"] = "ดึง timeline จาก GDELT ไม่ได้"
     return out
 
 
@@ -318,6 +360,7 @@ def _timeline(query: str, mode: str, timespan: str, tag: str) -> dict:
 # ---------------------------------------------------------------------------
 CHUNK_DAYS = 85            # เผื่อขอบ ไม่ให้ชนเพดาน 90 วันพอดี
 CHUNK_CACHE_TTL = 60 * 60 * 24 * 60   # ช่วงที่ผ่านไปแล้วไม่เปลี่ยนอีก เก็บยาว 60 วัน
+LAST_GOOD_TTL = 60 * 60 * 24 * 7      # สำเนา "ครั้งที่ได้ผลล่าสุด" เก็บไว้ 7 วัน
 MAX_NEW_CHUNKS_PER_CALL = 2           # ต่อ 1 คำขอ ดึงของใหม่ไม่เกินเท่านี้ (กันช้า/โดนบล็อก)
 
 

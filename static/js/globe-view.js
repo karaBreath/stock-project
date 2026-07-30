@@ -106,6 +106,8 @@ routes.globe = async (app) => {
       <div class="grid cols-3" style="margin-bottom:14px">
         <div class="card span-2" style="padding:0;overflow:hidden">
           <div id="globeBox" class="globe-box">${loader('กำลังโหลดลูกโลก…')}</div>
+          <div id="globeNote" class="small muted"
+               style="padding:8px 12px;display:none;border-top:1px solid var(--stroke)"></div>
         </div>
         <div class="card">
           <div class="card-title">อุณหภูมิข่าวโลก (Tone)</div>
@@ -170,14 +172,32 @@ routes.globe = async (app) => {
     const res = await api(`/world/points?timespan=${timespan}`);
     pointsCache = res.points || [];
     if (!pointsCache.length) {
-      $('#globeBox').innerHTML = emptyState('🌐',
-        'ยังดึงข้อมูลข่าวจาก GDELT ไม่ได้<br><span class="small">ตรวจสอบอินเทอร์เน็ต แล้วลองใหม่</span>');
+      const why = res.timeout
+        ? 'ใช้เวลานานเกินไป — GDELT ตอบช้าอยู่'
+        : 'GDELT จำกัดอัตราการเรียก (ฟรีจึงมีโควตา)';
+      $('#globeBox').innerHTML = `<div style="text-align:center;padding:24px">
+        ${emptyState('🌐', `ยังไม่มีข้อมูลข่าว — ${why}`)}
+        <div class="small muted" style="max-width:420px;margin:0 auto 12px">
+          ระบบจะทยอยเก็บข่าวให้เองเรื่อย ๆ เปิดหน้านี้อีกครั้งภายหลังจะมีข้อมูลขึ้นมา
+        </div>
+        <button class="btn" id="gbRetry">ลองใหม่เดี๋ยวนี้</button></div>`;
+      const b = $('#gbRetry');
+      if (b) b.onclick = () => { $('#globeBox').innerHTML = loader('กำลังลองใหม่…'); loadPoints(); };
       return;
     }
+    // ถ้าเป็นข้อมูลที่เก็บไว้ (ดึงสดไม่ได้) ต้องบอกให้รู้ ไม่ทำเหมือนเป็นของสด
+    staleNote = res.note || '';
     renderPoints();
   }
 
+  let staleNote = '';
+
   async function renderPoints() {
+    const noteEl = $('#globeNote');
+    if (noteEl) {
+      noteEl.style.display = staleNote ? 'block' : 'none';
+      noteEl.innerHTML = staleNote ? `⏳ ${staleNote}` : '';
+    }
     const pts = activeTheme ? pointsCache.filter(p => p.theme === activeTheme) : pointsCache;
     const ok = await ensureGlobeLib();
 
