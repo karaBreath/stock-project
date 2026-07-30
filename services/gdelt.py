@@ -383,6 +383,29 @@ def _empty_themes():
              "ok": False} for k, v in Config.WORLD_THEMES.items()]
 
 
+_MATCHERS = {}
+
+
+def _theme_matchers() -> dict:
+    """
+    สร้างตัวจับคำของแต่ละธีมแบบ "ทั้งคำ" ไม่ใช่ substring
+
+    บั๊กที่เทสจับได้จริง: จับแบบ substring ทำให้ "Local bakery wins a-w-a-r-d"
+    ถูกนับเป็นข่าวสงคราม (เพราะ award มี war อยู่ข้างใน) เช่นเดียวกับ
+    warning/warehouse/strike ในคำอื่น ๆ — จุดบนลูกโลกจึงผิดธีมโดยไม่มีใครรู้
+    """
+    if _MATCHERS.get("_src") is Config.WORLD_THEME_KEYWORDS:
+        return _MATCHERS["_rx"]
+    rx = {}
+    for key, words in Config.WORLD_THEME_KEYWORDS.items():
+        pats = [re.escape(w.strip().lower()) for w in words if w.strip()]
+        if pats:
+            rx[key] = re.compile(r"(?<![a-z0-9])(?:" + "|".join(pats) + r")(?![a-z0-9])")
+    _MATCHERS["_src"] = Config.WORLD_THEME_KEYWORDS
+    _MATCHERS["_rx"] = rx
+    return rx
+
+
 def _classify_articles(arts) -> dict:
     """
     จัดข่าวเข้าธีมจากคำในพาดหัว · 1 ข่าวเข้าได้หลายธีม (เช่นข่าวชิปโดนภาษี)
@@ -390,14 +413,20 @@ def _classify_articles(arts) -> dict:
     """
     buckets = {}
     for a in arts:
-        text = f" {(a.get('title') or '').lower()} "
+        text = (a.get("title") or "").lower()
         hit = False
-        for key, words in Config.WORLD_THEME_KEYWORDS.items():
-            if any(w in text for w in words):
+        for key, rx in _theme_matchers().items():
+            if rx.search(text):
                 buckets.setdefault(key, []).append(a)
                 hit = True
         if not hit:
-            buckets.setdefault("_none", []).append(a)
+            # พาดหัวไม่มีคำที่แยกธีมได้ (เจอบ่อยมาก เช่นพาดหัวภาษาจีน/ญี่ปุ่น)
+            # แต่เรารู้ว่าไปค้นมาด้วยคำอะไร จึงใช้ธีมของคำนั้นแทน — ไม่ใช่การเดา
+            by_word = Config.WORLD_WORD_THEME.get((a.get("_w") or "").lower())
+            if by_word in Config.WORLD_THEMES:
+                buckets.setdefault(by_word, []).append(a)
+            else:
+                buckets.setdefault("_none", []).append(a)
     return buckets
 
 

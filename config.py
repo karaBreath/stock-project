@@ -112,6 +112,15 @@ class Config:
         "economy,market,inflation,energy,war,chip,tariff,earthquake,Thailand,"
         "earnings,oil,flood"
     ).split(",") if w.strip())
+    # คำที่ยิงไปหมายถึงธีมไหน — ใช้เป็นตัวช่วยเมื่อพาดหัวไม่มีคำที่แยกธีมได้
+    # (วัดจริง: ข่าว 149 ชิ้นแยกธีมจากพาดหัวได้แค่ 24 ชิ้น อีก 125 ชิ้นถูกทิ้ง
+    #  ทั้งที่เรารู้อยู่แล้วว่าไปค้นมาด้วยคำอะไร — ข้อมูลนี้ใช้ได้และซื่อสัตย์)
+    WORLD_WORD_THEME = {
+        "economy": "market", "market": "market", "inflation": "inflation",
+        "energy": "energy", "oil": "energy", "war": "conflict",
+        "chip": "tech", "tariff": "trade", "earthquake": "disaster",
+        "flood": "disaster", "thailand": "thailand", "earnings": "earnings",
+    }
     WORLD_MAXRECORDS = int(os.environ.get("WORLD_MAXRECORDS", "50"))
     WORLD_POOL_HOURS = int(os.environ.get("WORLD_POOL_HOURS", "36"))   # อายุข่าวในคลัง
     WORLD_POOL_MAX = int(os.environ.get("WORLD_POOL_MAX", "600"))      # เก็บสูงสุดกี่ข่าว

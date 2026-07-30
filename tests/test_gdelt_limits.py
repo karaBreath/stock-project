@@ -286,7 +286,14 @@ def test_articles_classified_into_right_themes(monkeypatch):
     for key in ("market", "inflation", "tech", "trade", "conflict",
                 "energy", "disaster", "thailand", "earnings"):
         assert got.get(key, 0) > 0, f"ธีม {key} ควรมีจุดจากข่าวที่ให้ไป"
-    assert snap["unclassified"] >= 1, "ข่าวที่ไม่เข้าธีมต้องถูกนับไว้อย่างซื่อสัตย์"
+    # ข่าวที่พาดหัวแยกธีมไม่ได้ ("Local bakery wins award") ต้องไม่หายไปเฉย ๆ
+    # แต่ไปอยู่ในธีมของคำที่ใช้ค้นมา
+    assert snap["unclassified"] == 0
+
+    # ส่วนข่าวที่ไม่รู้ที่มา (ไม่มีคำค้นกำกับ) ต้องยังถูกนับไว้อย่างซื่อสัตย์
+    orphan = G._classify_articles([{"title": "Local bakery wins award",
+                                    "url": "http://x", "sourcecountry": "France"}])
+    assert len(orphan.get("_none", [])) == 1
 
 
 def test_theme_filter_does_not_fire_extra_requests(monkeypatch):
@@ -557,3 +564,47 @@ def test_timeline_falls_back_to_last_good(monkeypatch):
     assert b["series"] == a["series"] and b["stale"] is True
 
 
+
+
+def test_untitled_theme_falls_back_to_search_word(monkeypatch):
+    """
+    พาดหัวที่ไม่มีคำอังกฤษให้แยกธีม (เช่นข่าวจีน/ญี่ปุ่น) ต้องไม่ถูกทิ้ง
+
+    วัดจริงจาก GDELT: ข่าว 149 ชิ้นแยกธีมจากพาดหัวได้แค่ 24 ชิ้น
+    ที่เหลือหายไปจากลูกโลกทั้งที่เรารู้ว่าค้นมาด้วยคำอะไร
+    """
+    arts = [{"title": "存储芯片短缺波及产业链", "url": "http://cn1",
+             "sourcecountry": "China"}]
+    _fake_gdelt(monkeypatch, per_call=lambda w, n: list(arts))
+    G.refill_pool(1)                     # คำแรกใน WORLD_FETCH_WORDS
+    word = G.Config.WORLD_FETCH_WORDS[0]
+    expect = G.Config.WORLD_WORD_THEME[word.lower()]
+
+    snap = G.world_snapshot("24h")
+    got = {t["key"]: t["count"] for t in snap["themes"]}
+    assert got[expect] == 1, f"ข่าวที่ค้นด้วย '{word}' ควรเข้าธีม {expect}"
+    assert snap["unclassified"] == 0
+
+
+def test_every_fetch_word_maps_to_a_real_theme():
+    """ทุกคำที่ยิงต้องรู้ว่าเป็นธีมไหน ไม่งั้นข่าวจะหล่นหายเงียบ ๆ"""
+    for w in G.Config.WORLD_FETCH_WORDS:
+        key = G.Config.WORLD_WORD_THEME.get(w.lower())
+        assert key in G.Config.WORLD_THEMES, f"คำ '{w}' ยังไม่ได้จับคู่ธีม"
+
+
+@pytest.mark.parametrize("title,should_be_conflict", [
+    ("Local bakery wins award", False),          # award มี war อยู่ข้างใน
+    ("Company issues profit warning", False),    # warning ก็มี war
+    ("New warehouse opens in Ohio", False),
+    ("War escalates near the border", True),
+    ("Postwar reconstruction begins", False),    # จับทั้งคำเท่านั้น
+])
+def test_theme_keywords_match_whole_words_only(title, should_be_conflict):
+    """
+    จับคำต้องเป็น "ทั้งคำ" ไม่ใช่ substring
+    (บั๊กจริง: ข่าวร้านเบเกอรี่ชนะรางวัลถูกปักเป็นข่าวสงครามบนลูกโลก)
+    """
+    got = G._classify_articles([{"title": title, "url": "http://t",
+                                 "sourcecountry": "France"}])
+    assert ("conflict" in got) is should_be_conflict
