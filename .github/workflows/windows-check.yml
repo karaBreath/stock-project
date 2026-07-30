@@ -95,6 +95,9 @@ jobs:
           Write-Host "  Arguments   : $($s.Arguments)"
           Write-Host "  IconLocation: $($s.IconLocation)"
           Write-Host "  Description : $($s.Description)"
+          if ($s.Description -match '\?\?\?') {
+            throw "Description got mangled into question marks - use ASCII"
+          }
           if ($s.Arguments -notlike "*gui.py*") { throw "Shortcut does not point at gui.py" }
           if (-not (Test-Path $s.TargetPath))   { throw "Shortcut target does not exist" }
           $icon = ($s.IconLocation -split ',')[0]
@@ -156,6 +159,22 @@ jobs:
           root.destroy()
           print("  ผ่านทั้งหมด")
           PY
+
+      # พิมพ์ภาพหน้าจอออกมาเป็นข้อความ เพื่อให้ดึงกลับมาดูได้จากบันทึกโดยตรง
+      # (เครื่องที่พัฒนาอยู่โหลดไฟล์แนบไม่ได้ ถ้าไม่ทำแบบนี้ก็จะไม่มีวันได้เห็น
+      #  ว่าหน้าต่างจริงหน้าตาเป็นอย่างไร)
+      - name: "5) พิมพ์ภาพหน้าจอออกมาเป็นข้อความ"
+        if: always()
+        shell: bash
+        run: |
+          if [ -f gui-shot.png ]; then
+            echo "SHOTSIZE $(wc -c < gui-shot.png)"
+            echo "SHOT_BEGIN"
+            base64 -w 200 gui-shot.png
+            echo "SHOT_END"
+          else
+            echo "no screenshot"
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()

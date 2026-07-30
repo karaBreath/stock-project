@@ -13,6 +13,7 @@ BASE = Path(__file__).resolve().parent.parent
 IS_WIN = platform.system() == "Windows"
 
 APP_NAME = "เทรดข่าวโลก"
+APP_DESCRIPTION = "NEBULA - world news trading"   # ดูเหตุผลที่ต้องเป็นอังกฤษใน shortcut_script
 ICON_SOURCE = BASE / "static" / "icons" / "icon-192.png"
 ICON_PATH = BASE / "static" / "icons" / "app.ico"
 
@@ -192,7 +193,11 @@ def shortcut_script(link: Path, target: Path, args: str, workdir: Path,
         f"$s.Arguments = {_ps_quote(args)};"
         f"$s.WorkingDirectory = {_ps_quote(workdir)};"
         f"$s.IconLocation = {_ps_quote(icon)};"
-        f"$s.Description = {_ps_quote(APP_NAME)};"
+        # ⚠️ คำอธิบาย (ข้อความที่โผล่ตอนเอาเมาส์ไปชี้) ต้องเป็นอังกฤษ
+        # WScript.Shell แปลงเป็น ANSI ก่อนเก็บ ภาษาไทยจะกลายเป็น "???????????"
+        # ซึ่งผู้ใช้เห็นแล้วนึกว่าไฟล์เสีย — วัดมาแล้วบน windows-latest จริง
+        # ชื่อที่แสดงบนหน้าจอมาจากชื่อไฟล์ ซึ่งเป็นภาษาไทยถูกต้องอยู่แล้ว
+        f"$s.Description = {_ps_quote(APP_DESCRIPTION)};"
         "$s.Save();"
         "Write-Output 'SAVED'"
         "} catch { Write-Output ('FAILED: ' + $_.Exception.Message); exit 1 }"

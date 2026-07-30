@@ -209,6 +209,10 @@ def test_shortcut_script_reports_failures_instead_of_dying_silently():
                            __import__("pathlib").Path("p.exe"), '"g.py"',
                            __import__("pathlib").Path("."),
                            __import__("pathlib").Path("i.ico"))
+    assert D.APP_NAME not in ps.split("Description")[1][:80], (
+        "คำอธิบายต้องไม่เป็นภาษาไทย — COM แปลงเป็น ANSI แล้วได้ ??? "
+        "ซึ่งผู้ใช้เห็นตอนเอาเมาส์ไปชี้แล้วนึกว่าไฟล์เสีย")
+    assert D.APP_DESCRIPTION in ps and D.APP_DESCRIPTION.isascii()
     assert "try {" in ps and "catch" in ps
     assert "FAILED" in ps and "SAVED" in ps
     assert "exit 1" in ps, "ต้องคืน exit code ที่ไม่ใช่ 0 เวลาพัง"
