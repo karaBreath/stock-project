@@ -305,3 +305,36 @@ def test_status_reports_coverage(monkeypatch):
     st = E.status()
     assert st["events"] == 3 and st["countries"] == 3
     assert st["source"] == "gdelt-events-2.0"
+
+
+# ---------------------------------------------------------------------------
+# 5) QuadClass ต้องแยก "ขัดแย้ง" ออกจาก "การทูต" ได้จริง
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("quad,root,expect", [
+    ("4", "19", "conflict"),      # ขัดแย้งเป็นรูปธรรม (ปะทะ/โจมตี)
+    ("3", "11", "conflict"),      # ขัดแย้งด้วยวาจา (ประณาม/ปฏิเสธ/ข่มขู่)
+    ("1", "04", "geopolitics"),   # ร่วมมือด้วยวาจา
+    ("2", "06", "geopolitics"),   # ร่วมมือเป็นรูปธรรม
+])
+def test_quadclass_splits_conflict_from_diplomacy(quad, root, expect):
+    """
+    วัดจากข้อมูลจริง: ถ้าดูแต่ EventRootCode จะได้ 'การเมือง/การทูต' เกือบทุกจุด
+    เพราะรหัส 01-12 กินสัดส่วนเกือบทั้งหมด ลูกโลกกลายเป็นสีเดียวทั้งใบ
+    QuadClass (คอลัมน์ 29) แยกขัดแย้ง/ร่วมมือได้ตรงกว่า
+    """
+    assert E._theme_of(root, "https://x.com/plain-news", quad) == expect
+
+
+def test_quadclass_is_read_from_the_file(monkeypatch):
+    """ต้องอ่าน QuadClass จากไฟล์จริง ไม่ใช่แค่รับมาเป็นพารามิเตอร์"""
+    row = _row(id="1", root="11")
+    row[E.C_QUAD] = "3"
+    row[E.C_URL] = "https://x.com/plain-news"
+    _fake_net(monkeypatch, [row])
+    got = E.fetch_slice("http://x/a.export.CSV.zip")
+    assert got[0]["theme"] == "conflict"
+
+
+def test_url_keywords_still_win_over_quadclass(monkeypatch):
+    """ลิงก์ข่าวบอกเรื่องได้ตรงที่สุด ต้องชนะทั้ง QuadClass และ RootCode"""
+    assert E._theme_of("19", "https://x.com/2026/oil-prices-opec-cut", "4") == "energy"
