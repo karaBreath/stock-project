@@ -75,16 +75,26 @@ jobs:
           $lnk | ForEach-Object { Write-Host "  found: $($_.Name) ($($_.Length) bytes)" }
           if (-not $lnk) { throw "No .lnk on the desktop - the user would have nothing to click" }
 
+          $bytes = [Text.Encoding]::UTF8.GetBytes($lnk[0].Name)
+          Write-Host "  Name bytes  : $($bytes -join ' ')"
+
           # The shortcut must really point at gui.py, not just be an empty file
           # sitting there looking convincing.
+          #
+          # Read it back through an ASCII COPY, never the Thai path directly.
+          # WScript.Shell converts paths to the system ANSI code page, so on a
+          # non-Thai machine it cannot find the real file -- and CreateShortcut
+          # silently hands back a BLANK new shortcut instead of failing, which
+          # reads as "every field is empty" and looks like a broken shortcut.
+          # Copy-Item is a PowerShell cmdlet and is Unicode-safe.
+          $probe = Join-Path $env:TEMP "verify-shortcut.lnk"
+          Copy-Item -LiteralPath $lnk[0].FullName -Destination $probe -Force
           $sh = New-Object -ComObject WScript.Shell
-          $s = $sh.CreateShortcut($lnk[0].FullName)
+          $s = $sh.CreateShortcut($probe)
           Write-Host "  TargetPath  : $($s.TargetPath)"
           Write-Host "  Arguments   : $($s.Arguments)"
           Write-Host "  IconLocation: $($s.IconLocation)"
           Write-Host "  Description : $($s.Description)"
-          $bytes = [Text.Encoding]::UTF8.GetBytes($lnk[0].Name)
-          Write-Host "  Name bytes  : $($bytes -join ' ')"
           if ($s.Arguments -notlike "*gui.py*") { throw "Shortcut does not point at gui.py" }
           if (-not (Test-Path $s.TargetPath))   { throw "Shortcut target does not exist" }
           $icon = ($s.IconLocation -split ',')[0]
