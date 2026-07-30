@@ -151,20 +151,42 @@ def _fake_gdelt(monkeypatch, per_call=None, store=None):
     monkeypatch.setattr(G, "_fetch_json", fake_fetch)
     monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
     monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
+    # เส้นทางที่ผู้ใช้เปิดหน้าต้องไม่ยิงเน็ตเอง แค่ "ปลุก" ตัวเก็บเบื้องหลัง
+    # เทสจึงนับการปลุกแทนการรันเธรดจริง (เธรดจริงมีเทสของตัวเองด้านล่าง)
+    calls["fill_calls"] = 0
+
+    def fake_ensure():
+        calls["fill_calls"] += 1
+        return not (store.get(G.POOL_KEY) or {}).get("articles")
+
+    monkeypatch.setattr(G, "ensure_filling", fake_ensure)
     return calls, store
 
 
-def test_page_load_sends_exactly_one_request(monkeypatch):
+def test_page_load_never_waits_for_gdelt(monkeypatch):
     """
-    เปิดหน้าลูกโลก 1 ครั้ง = ยิง GDELT ครั้งเดียวเท่านั้น
+    เปิดหน้าลูกโลก = **ไม่ยิง GDELT แบบรอคำตอบเลย** แค่ปลุกตัวเก็บเบื้องหลัง
 
-    เดิมยิงธีมละครั้ง (9 ครั้ง) ซึ่งวัดแล้วไม่มีทางสำเร็จครบ ลูกโลกจึงว่างเปล่า
-    เทสนี้กันไม่ให้กลับไปเป็นแบบนั้นอีก
+    วัดจริงแล้ว GDELT ใช้เวลาตอบ 10-18 วินาทีและปฏิเสธราวครึ่งหนึ่ง
+    ถ้าเปิดหน้าแล้วรอ = หน้าค้างนานและว่างเปล่าบ่อย เทสนี้กันไม่ให้กลับไปเป็นแบบนั้น
     """
+    calls, store = _fake_gdelt(monkeypatch)
+    G.refill_pool(1)                              # สมมติตัวเก็บเบื้องหลังทำงานไปแล้ว
+    before = calls["n"]
+
+    res = G.all_theme_points("24h")
+    assert calls["n"] == before, f"เปิดหน้าต้องไม่ยิง GDELT แต่ยิงเพิ่ม {calls['n'] - before}"
+    assert calls["fill_calls"] == 1, "ต้องปลุกตัวเก็บเบื้องหลังทุกครั้งที่เปิดหน้า"
+    assert res["ok"] and res["points"]
+
+
+def test_empty_pool_page_still_answers_and_says_it_is_filling(monkeypatch):
+    """คลังยังว่าง: หน้าเว็บต้องได้คำตอบทันที + รู้ว่ากำลังเก็บอยู่ (ไม่ใช่ค้างรอ)"""
     calls, _ = _fake_gdelt(monkeypatch)
     res = G.all_theme_points("24h")
-    assert calls["n"] == 1, f"ต้องยิงครั้งเดียว แต่ยิง {calls['n']} ครั้ง"
-    assert res["ok"] and res["points"]
+    assert calls["n"] == 0, "คลังว่างก็ห้ามรอ GDELT ตรงหน้าเว็บ"
+    assert res["filling"] is True and res["ok"] is False
+    assert res.get("error") and res.get("note")
 
 
 def test_request_shape_matches_what_gdelt_accepts(monkeypatch):
@@ -176,28 +198,55 @@ def test_request_shape_matches_what_gdelt_accepts(monkeypatch):
 
 
 def test_words_rotate_so_pool_covers_more_themes(monkeypatch):
-    """เปิดหน้าหลายครั้งต้องวนคำไปเรื่อย ๆ ไม่ยิงคำเดิมซ้ำ"""
+    """เก็บหลายรอบต้องวนคำไปเรื่อย ๆ ไม่ยิงคำเดิมซ้ำ"""
     calls, store = _fake_gdelt(monkeypatch)
     for _ in range(4):
-        G.world_snapshot("24h")
+        G.refill_pool(1)
     assert len(set(calls["words"])) == 4, f"ต้องวนคำ แต่ได้ {calls['words']}"
+
+
+def test_filler_keeps_trying_until_pool_is_full(monkeypatch):
+    """
+    หัวใจของการแก้ครั้งนี้: GDELT ปฏิเสธราวครึ่งหนึ่ง ตัวเก็บจึงห้ามยอมแพ้ครั้งเดียว
+
+    จำลองให้ล้ม 3 ครั้งแรกแล้วค่อยสำเร็จ — ต้องได้ข่าวเข้าคลังจริง
+    (ยิงครั้งเดียวแล้วเลิกแบบเดิม = ลูกโลกว่าง ซึ่งเป็นบั๊กที่ผู้ใช้เจอ)
+    """
+    calls, _ = _fake_gdelt(monkeypatch,
+                           per_call=lambda w, n: [] if n <= 3 else list(ARTS))
+    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0)
+    assert calls["n"] >= 4, f"ต้องลองต่อหลังล้ม แต่ยิงแค่ {calls['n']} ครั้ง"
+    assert len(G._pool_load()["articles"]) == len(ARTS)
+
+
+def test_filler_stops_when_target_reached(monkeypatch):
+    """ถึงเป้าแล้วต้องหยุด ไม่ยิง GDELT รัวไปเรื่อย ๆ"""
+    calls, _ = _fake_gdelt(monkeypatch)
+    G.fill_rounds(target=len(ARTS), max_rounds=8, gap=0)
+    assert calls["n"] == 1, f"ได้ครบตั้งแต่ครั้งแรกต้องหยุด แต่ยิง {calls['n']} ครั้ง"
+
+
+def test_filler_gives_up_after_max_rounds(monkeypatch):
+    """GDELT ล่มยาว ตัวเก็บต้องเลิกตามจำนวนรอบ ไม่วนไม่รู้จบ"""
+    calls, _ = _fake_gdelt(monkeypatch, per_call=lambda w, n: [])
+    G.fill_rounds(target=100, max_rounds=5, gap=0)
+    assert calls["n"] == 5
 
 
 def test_pool_survives_failed_fetch(monkeypatch):
     """
-    หัวใจของความทนทาน: คำที่ยิงรอบนี้ล้ม ลูกโลกต้องยังวาดจากคลังเดิมได้
-
-    (วัดจริงแล้ว GDELT ปฏิเสธราว 20% ของคำขอที่ถูกรูปแบบ จึงต้องทนได้)
+    หัวใจของความทนทาน: รอบเก็บถัดไปล้ม ลูกโลกต้องยังวาดจากคลังเดิมได้
     """
     calls, store = _fake_gdelt(monkeypatch,
                                per_call=lambda w, n: list(ARTS) if n == 1 else [])
+    G.refill_pool(1)
     first = G.all_theme_points("24h")
     assert first["ok"] and first["points"]
 
-    second = G.all_theme_points("24h")           # รอบนี้ GDELT คืนว่าง
+    G.refill_pool(1)                             # รอบนี้ GDELT คืนว่าง
+    second = G.all_theme_points("24h")
     assert second["ok"], "ต้องยังวาดลูกโลกได้จากคลังเดิม"
     assert len(second["points"]) == len(first["points"])
-    assert "ปฏิเสธ" in (second.get("note") or ""), "ต้องบอกผู้ใช้ว่ารอบนี้ดึงสดไม่ได้"
 
 
 def test_pool_dedupes_and_accumulates(monkeypatch):
@@ -231,6 +280,7 @@ def test_pool_drops_articles_older_than_window(monkeypatch):
 
 def test_articles_classified_into_right_themes(monkeypatch):
     _fake_gdelt(monkeypatch)
+    G.refill_pool(1)
     snap = G.world_snapshot("24h")
     got = {t["key"]: t["count"] for t in snap["themes"]}
     for key in ("market", "inflation", "tech", "trade", "conflict",
@@ -242,7 +292,7 @@ def test_articles_classified_into_right_themes(monkeypatch):
 def test_theme_filter_does_not_fire_extra_requests(monkeypatch):
     """กดกรองธีมบนหน้าเว็บ ต้องไม่ยิง GDELT เพิ่ม"""
     calls, _ = _fake_gdelt(monkeypatch)
-    G.world_snapshot("24h")
+    G.refill_pool(1)
     before = calls["n"]
     for key in G.Config.WORLD_THEMES:
         assert G.world_points(theme=key, timespan="24h")["theme"] == key
@@ -251,6 +301,7 @@ def test_theme_filter_does_not_fire_extra_requests(monkeypatch):
 
 def test_unknown_country_skipped(monkeypatch):
     _fake_gdelt(monkeypatch)
+    G.refill_pool(1)
     snap = G.world_snapshot("24h")
     names = {p["name"] for p in snap["points"]}
     assert "Neverland" not in names and "United States" in names
@@ -268,10 +319,10 @@ def test_reports_error_when_pool_empty_and_fetch_fails(monkeypatch):
 
 def test_background_warm_fetches_more_words(monkeypatch):
     """ตัวเก็บเบื้องหลังไม่มีใครรอ จึงเติมได้หลายคำต่อรอบ"""
-    calls, _ = _fake_gdelt(monkeypatch)
+    calls, _ = _fake_gdelt(monkeypatch, per_call=lambda w, n: list(ARTS[:1]))
     G.warm_cache("24h")
-    assert calls["n"] == 3, f"ควรเติม 3 คำต่อรอบ แต่ยิง {calls['n']}"
-    assert len(set(calls["words"])) == 3
+    assert calls["n"] >= 3, f"ควรเติมหลายคำต่อรอบ แต่ยิง {calls['n']}"
+    assert len(set(calls["words"])) == calls["n"], "ต้องวนคำไม่ซ้ำ"
 
 
 def test_theme_points_offset_so_bars_do_not_overlap(monkeypatch):
@@ -283,6 +334,7 @@ def test_theme_points_offset_so_bars_do_not_overlap(monkeypatch):
          "sourcecountry": "Japan"},
     ]
     _fake_gdelt(monkeypatch, per_call=lambda w, n: list(arts))
+    G.refill_pool(1)
     snap = G.world_snapshot("24h")
     a = [p for p in snap["points"] if p["theme"] == "conflict"][0]
     b = [p for p in snap["points"] if p["theme"] == "tech"][0]

@@ -199,16 +199,20 @@ def _fetch_one_word(word: str):
 def refill_pool(rounds: int = 1) -> dict:
     """
     เติมคลังข่าวทีละคำ วนไปเรื่อย ๆ (คำที่ล้มจะได้คิวใหม่รอบหน้าเอง)
-    เรียกจากหน้าเว็บ (rounds=1 เพื่อไม่ให้ช้า) และจากตัวเก็บเบื้องหลัง (rounds มากกว่า)
+
+    ⚠️ ฟังก์ชันนี้ "ช้า" โดยธรรมชาติ — วัดจริงแล้ว GDELT ใช้เวลาตอบ 10-18 วินาที
+    ต่อคำขอ และปฏิเสธราวครึ่งหนึ่ง จึงห้ามเรียกจากเส้นทางที่ผู้ใช้นั่งรออยู่
+    ให้เรียกจากเธรดเบื้องหลัง (ดู ensure_filling) เท่านั้น
     """
     pool = _pool_load()
     words = list(Config.WORLD_FETCH_WORDS)
     if not words:
         return {"added": 0, "tried": 0, "ok": 0}
 
-    added = ok = 0
+    added = ok = tried = 0
     for i in range(max(1, rounds)):
         word = words[(pool["cursor"] + i) % len(words)]
+        tried += 1
         arts = _fetch_one_word(word)
         if arts:
             ok += 1
@@ -223,11 +227,95 @@ def refill_pool(rounds: int = 1) -> dict:
     pool["cursor"] = (pool["cursor"] + max(1, rounds)) % len(words)
     pool["updated"] = dt.datetime.now().isoformat(timespec="minutes")
     _pool_save(pool)
-    return {"added": added, "tried": max(1, rounds), "ok": ok,
+    return {"added": added, "tried": tried, "ok": ok,
             "pool_size": len(pool["articles"])}
 
 
-def world_snapshot(timespan: str = "24h", refill: bool = True) -> dict:
+# ---------------------------------------------------------------------------
+# ตัวเก็บข่าวเบื้องหลัง — หัวใจที่ทำให้ลูกโลกไม่ค้างและไม่ว่าง
+# ---------------------------------------------------------------------------
+# เหตุผลที่ต้องมี (วัดจาก GDELT จริง ไม่ได้เดา):
+#   - คำขอหนึ่งครั้งใช้เวลา 10-18 วินาที  -> ถ้าเปิดหน้าแล้วรอ = หน้าค้าง
+#   - ถูกปฏิเสธราวครึ่งหนึ่งของคำขอ        -> ถ้ายิงครั้งเดียวต่อการเปิดหน้า
+#                                            โอกาสได้ข่าวมีแค่ ~50% ลูกโลกจึงว่างบ่อย
+# วิธีแก้: เปิดหน้า = อ่านจากคลังทันที (ไม่รอเน็ตเลย) แล้วสั่งให้เธรดเบื้องหลัง
+# ไล่เก็บข่าวต่อจนคลังพอ ระหว่างนั้นหน้าเว็บ poll ดูคลังโตขึ้นแล้ววาดเพิ่มเอง
+FILL_TARGET = 120          # ข่าวในคลังที่ถือว่าพอวาดลูกโลกได้ดี
+FILL_MAX_SECONDS = 300     # ตัวเก็บทำงานต่อรอบไม่เกินเท่านี้
+FILL_MAX_ROUNDS = 24       # และยิงไม่เกินเท่านี้ต่อรอบ (กันวนไม่รู้จบตอน GDELT ล่ม)
+FILL_GAP_SEC = 5           # เว้นจังหวะระหว่างคำ (นอกเหนือจากเวลาที่ GDELT ใช้ตอบ)
+
+_filler_lock = threading.Lock()
+_filler = {"running": False, "started": 0.0, "tried": 0, "ok": 0,
+           "added": 0, "finished": None}
+
+
+def filler_state() -> dict:
+    with _filler_lock:
+        st = dict(_filler)
+    st["cooldown"] = cooldown_left()
+    return st
+
+
+def fill_rounds(target: int = FILL_TARGET, max_rounds: int = FILL_MAX_ROUNDS,
+                max_seconds: int = FILL_MAX_SECONDS, gap: float = FILL_GAP_SEC) -> dict:
+    """
+    ไล่เก็บข่าวจนคลังถึงเป้า — ล้มก็ลองคำถัดไป ไม่ยอมแพ้ตั้งแต่ครั้งแรก
+
+    เหตุผล: วัดจริงแล้ว GDELT ปฏิเสธราวครึ่งหนึ่งของคำขอที่ถูกรูปแบบทุกอย่าง
+    ยิงครั้งเดียวแล้วเลิก = ลูกโลกว่าง 50% ของเวลา · ยิงต่อ 4 ครั้ง = พลาดหมด ~6%
+    """
+    deadline = time.time() + max_seconds
+    rounds = 0
+    while rounds < max_rounds and time.time() < deadline:
+        if len(_pool_load()["articles"]) >= target:
+            break
+        if in_cooldown():
+            time.sleep(min(cooldown_left() + 1, 10))
+            continue
+        rounds += 1
+        res = refill_pool(rounds=1)
+        with _filler_lock:
+            _filler["tried"] += res.get("tried", 0)
+            _filler["ok"] += res.get("ok", 0)
+            _filler["added"] += res.get("added", 0)
+        if gap:
+            time.sleep(gap)
+    return filler_state()
+
+
+def _fill_loop():
+    try:
+        fill_rounds()
+    except Exception as e:                       # เธรดเบื้องหลังห้ามล้มเงียบ ๆ
+        with _filler_lock:
+            _filler["error"] = str(e)[:200]
+    finally:
+        with _filler_lock:
+            _filler["running"] = False
+            _filler["finished"] = dt.datetime.now().isoformat(timespec="seconds")
+
+
+def ensure_filling() -> bool:
+    """
+    สั่งให้ตัวเก็บข่าวเบื้องหลังทำงานถ้าคลังยังไม่พอ — คืนค่าว่ากำลังเก็บอยู่ไหม
+    เรียกจากหน้าเว็บได้ เพราะ "ไม่บล็อก" (แค่ปลุกเธรดแล้วคืนค่าทันที)
+    """
+    if not _REQ_OK:
+        return False
+    with _filler_lock:
+        if _filler["running"]:
+            return True
+        if len(_pool_load()["articles"]) >= FILL_TARGET:
+            return False
+        _filler.update({"running": True, "started": time.time(),
+                        "tried": 0, "ok": 0, "added": 0, "finished": None})
+        _filler.pop("error", None)
+    threading.Thread(target=_fill_loop, daemon=True, name="gdelt-filler").start()
+    return True
+
+
+def world_snapshot(timespan: str = "24h", refill: bool = False) -> dict:
     """
     จุดข่าวบนลูกโลก — สร้างจาก "คลังข่าวสะสม" ไม่ใช่การยิงสด 9 ครั้ง
 
@@ -252,12 +340,13 @@ def world_snapshot(timespan: str = "24h", refill: bool = True) -> dict:
     pool = _pool_load()
     arts = pool["articles"]
     if not arts:
+        st = filler_state()
         return {"ok": False, "points": [], "themes": _empty_themes(),
                 "timespan": timespan, "articles_seen": 0, "pool_size": 0,
-                "fetch": fetch,
-                "error": (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
-                          if in_cooldown() else
-                          "ยังไม่มีข่าวในคลัง — GDELT ปฏิเสธคำขอรอบนี้ ลองใหม่อีกครั้งได้")}
+                "fetch": fetch, "filling": st["running"], "filler": st,
+                "error": ("กำลังเก็บข่าวจาก GDELT อยู่เบื้องหลัง — ลูกโลกจะขึ้นเองภายในไม่กี่สิบวินาที"
+                          if st["running"] else
+                          "ยังไม่มีข่าวในคลัง — GDELT ปฏิเสธคำขอรอบล่าสุด ระบบจะลองเก็บใหม่ให้")}
 
     by_theme = _classify_articles(arts)
     points, themes = [], []
@@ -280,6 +369,7 @@ def world_snapshot(timespan: str = "24h", refill: bool = True) -> dict:
         "unclassified": len(by_theme.get("_none", [])),
         "source": "artlist-pool",
         "fetch": fetch,
+        "filling": filler_state()["running"],
         "fetched_at": pool.get("last_ok") or pool.get("updated"),
     }
 
@@ -315,9 +405,8 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
     จะกลายเป็น 9 คำขอต่อการดูหนึ่งครั้ง = ปัญหาเดิมที่ทำให้ลูกโลกพัง
     ยิงได้กรณีเดียวคือคลังยังว่างสนิท (เช่นเปิดแอปครั้งแรก)
     """
+    ensure_filling()
     snap = world_snapshot(timespan, refill=False)
-    if not snap.get("points") and not snap.get("pool_size"):
-        snap = world_snapshot(timespan, refill=True)
     label, q, color = Config.WORLD_THEMES.get(
         theme, ("ข่าวทั่วโลก", query or "", "#4dd4ff"))
     pts = [p for p in snap.get("points", []) if not theme or p.get("theme") == theme]
@@ -325,6 +414,8 @@ def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dic
         "theme": theme, "label": label, "color": color, "query": q,
         "timespan": snap.get("timespan", timespan),
         "points": pts, "ok": bool(pts), "total": len(pts),
+        "filling": snap.get("filling", False),
+        "pool_size": snap.get("pool_size", 0),
         "articles_seen": snap.get("articles_seen"),
         "stale": snap.get("stale", False),
         "note": snap.get("note"),
@@ -383,23 +474,33 @@ def _links_from_html(html: str):
 
 
 def all_theme_points(timespan: str = "24h") -> dict:
-    """จุดข่าวทุกธีมสำหรับหน้าลูกโลก — 1 คำขอต่อการเปิดหน้า (ดู world_snapshot)"""
-    snap = world_snapshot(timespan)
+    """
+    จุดข่าวทุกธีมสำหรับหน้าลูกโลก — **ตอบทันทีจากคลัง ไม่รอ GDELT เลย**
+
+    ถ้าคลังยังไม่พอ จะปลุกตัวเก็บเบื้องหลังให้ไปไล่เก็บ แล้วบอกหน้าเว็บว่า
+    filling=True เพื่อให้หน้าเว็บถามซ้ำเป็นระยะและวาดเพิ่มเมื่อคลังโตขึ้น
+    (เหตุผลที่ห้ามรอ: GDELT ใช้เวลาตอบ 10-18 วิ และปฏิเสธราวครึ่งหนึ่ง)
+    """
+    filling = ensure_filling()
+    snap = world_snapshot(timespan, refill=False)
     themes = snap.get("themes") or _empty_themes()
     empty = [t for t in themes if not t.get("count")]
-    f = snap.get("fetch") or {}
+    st = filler_state()
 
     notes = []
-    if snap.get("ok") and empty:
-        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวในคลัง — ระบบทยอยเก็บเพิ่มทุกครั้งที่เปิดหน้านี้")
-    if f and f.get("tried") and not f.get("ok"):
-        notes.append("รอบนี้ GDELT ปฏิเสธคำขอ — แสดงจากคลังที่สะสมไว้")
+    if filling:
+        notes.append(f"กำลังเก็บข่าวเพิ่มเบื้องหลัง (ได้แล้ว {snap.get('pool_size', 0)} ข่าว) "
+                     "— ลูกโลกจะขึ้นครบเองไม่ต้องกดอะไร")
+    if snap.get("ok") and empty and not filling:
+        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวในคลัง — ระบบทยอยเก็บเพิ่มให้เอง")
 
     return {
         "themes": themes,
         "points": snap.get("points", []),
         "timespan": timespan,
         "ok": snap.get("ok", False),
+        "filling": filling,
+        "filler": st,
         "skipped_themes": len(empty) if snap.get("ok") else len(themes),
         "pool_size": snap.get("pool_size", 0),
         "articles_seen": snap.get("articles_seen"),
@@ -411,8 +512,8 @@ def all_theme_points(timespan: str = "24h") -> dict:
 
 
 def warm_cache(timespan: str = "24h") -> dict:
-    """เติมคลังข่าวล่วงหน้าจากเธรดเบื้องหลัง — ทำหลายคำต่อรอบได้เพราะไม่มีใครรออยู่"""
-    res = refill_pool(rounds=3)
+    """เติมคลังข่าวล่วงหน้าจากตัวเก็บข้อมูลรายชั่วโมง (บล็อกได้ เพราะไม่มีใครรออยู่)"""
+    res = fill_rounds(max_rounds=6, max_seconds=180, gap=2)
     snap = world_snapshot(timespan, refill=False)
     return {"fetched": res, "points": len(snap.get("points", [])),
             "pool_size": snap.get("pool_size", 0)}

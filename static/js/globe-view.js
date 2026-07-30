@@ -168,26 +168,60 @@ routes.globe = async (app) => {
   });
 
   // ---- points ----
+  // GDELT ใช้เวลาตอบ 10-18 วิ และปฏิเสธราวครึ่งหนึ่ง (วัดจริง) จึงห้ามให้หน้าเว็บ
+  // นั่งรอ — ฝั่งเซิร์ฟเวอร์ตอบจากคลังทันทีแล้วบอก filling=true ระหว่างเก็บเพิ่ม
+  // หน้านี้จึงถามซ้ำทุก 6 วิ แล้ววาดเพิ่มเองเมื่อคลังโตขึ้น ผู้ใช้ไม่ต้องกดอะไร
+  const POLL_MS = 6000;
+  const POLL_MAX = 50;             // ~5 นาที แล้วหยุดเอง ไม่ยิงรัวไม่รู้จบ
+  let pollTimer = null;
+  let pollCount = 0;
+
+  function stopPoll() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
   async function loadPoints() {
     const res = await api(`/world/points?timespan=${timespan}`);
+    stopPoll();
+    // ผู้ใช้อาจเปลี่ยนหน้าไปแล้วระหว่างรอ — ห้ามเขียนลง DOM ที่หายไปแล้ว
+    if (!$('#globeBox')) return;
+
     pointsCache = res.points || [];
-    if (!pointsCache.length) {
-      const why = res.timeout
-        ? 'ใช้เวลานานเกินไป — GDELT ตอบช้าอยู่'
-        : 'GDELT จำกัดอัตราการเรียก (ฟรีจึงมีโควตา)';
-      $('#globeBox').innerHTML = `<div style="text-align:center;padding:24px">
-        ${emptyState('🌐', `ยังไม่มีข้อมูลข่าว — ${why}`)}
-        <div class="small muted" style="max-width:420px;margin:0 auto 12px">
-          ระบบจะทยอยเก็บข่าวให้เองเรื่อย ๆ เปิดหน้านี้อีกครั้งภายหลังจะมีข้อมูลขึ้นมา
-        </div>
-        <button class="btn" id="gbRetry">ลองใหม่เดี๋ยวนี้</button></div>`;
-      const b = $('#gbRetry');
-      if (b) b.onclick = () => { $('#globeBox').innerHTML = loader('กำลังลองใหม่…'); loadPoints(); };
-      return;
-    }
-    // ถ้าเป็นข้อมูลที่เก็บไว้ (ดึงสดไม่ได้) ต้องบอกให้รู้ ไม่ทำเหมือนเป็นของสด
     staleNote = res.note || '';
-    renderPoints();
+
+    if (!pointsCache.length) {
+      const got = res.pool_size || 0;
+      const body = res.filling
+        ? `<div style="text-align:center;padding:24px">
+             ${loader('กำลังเก็บข่าวจากทั่วโลก…')}
+             <div class="small muted" style="max-width:440px;margin:12px auto 0">
+               ได้ข่าวมาแล้ว ${got} ชิ้น · GDELT เป็นบริการฟรีจึงตอบช้าและมีโควตา
+               ระบบกำลังไล่เก็บให้เบื้องหลัง ลูกโลกจะขึ้นเองไม่ต้องกดอะไร
+             </div>
+           </div>`
+        : `<div style="text-align:center;padding:24px">
+             ${emptyState('🌐', 'ยังไม่มีข้อมูลข่าว — GDELT ปฏิเสธคำขอรอบล่าสุด')}
+             <div class="small muted" style="max-width:440px;margin:0 auto 12px">
+               ${res.error || 'ระบบจะทยอยเก็บข่าวให้เองเรื่อย ๆ'}
+             </div>
+             <button class="btn" id="gbRetry">ลองใหม่เดี๋ยวนี้</button>
+           </div>`;
+      $('#globeBox').innerHTML = body;
+      const b = $('#gbRetry');
+      if (b) b.onclick = () => {
+        pollCount = 0;
+        $('#globeBox').innerHTML = loader('กำลังลองใหม่…');
+        loadPoints();
+      };
+    } else {
+      // ถ้าเป็นข้อมูลที่เก็บไว้ (ดึงสดไม่ได้) ต้องบอกให้รู้ ไม่ทำเหมือนเป็นของสด
+      renderPoints();
+    }
+
+    if (res.filling && pollCount < POLL_MAX) {
+      pollCount++;
+      pollTimer = setTimeout(loadPoints, POLL_MS);
+    }
   }
 
   let staleNote = '';
