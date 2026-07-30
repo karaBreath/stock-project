@@ -554,9 +554,14 @@ def test_cooldown_only_after_repeated_failures(monkeypatch):
 
 
 def test_globe_still_reports_error_when_nothing_cached(monkeypatch):
+    """ไม่มีข้อมูลจากแหล่งไหนเลย ต้องบอก error ตรง ๆ ไม่ใช่ทำเป็นว่ามีข้อมูล"""
     monkeypatch.setattr(G, "cache_get", lambda k: None)
     monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
     monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
+    # ต้องปิดแหล่ง Events ด้วย ไม่งั้นเทสนี้ไปขึ้นกับว่าคลังจริงมีอะไรค้างอยู่ไหม
+    monkeypatch.setattr(G, "_events_points",
+                        lambda theme="": {"points": [], "events": 0,
+                                          "total_places": 0, "updated": None})
     res = G.world_points(theme="market")
     assert res["ok"] is False and res.get("error") and not res.get("stale")
 
