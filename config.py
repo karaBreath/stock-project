@@ -102,6 +102,35 @@ class Config:
                      '("Thailand economy" OR "Thai baht" OR "Thai stocks" OR Bangkok)', "#4dd4ff"),
     }
 
+    # คำค้นรวมทุกธีมในคำขอเดียว — ใช้กับลูกโลก
+    # เหตุผล: ยิงธีมละครั้ง (9 ครั้ง) แทบไม่มีทางสำเร็จครบ เพราะ GDELT จำกัดอัตราแรง
+    # จึงยิงครั้งเดียวกว้าง ๆ แล้วมาแยกธีมเองในเครื่องด้วย WORLD_THEME_KEYWORDS
+    WORLD_COMBINED_QUERY = os.environ.get(
+        "WORLD_COMBINED_QUERY",
+        '("stock market" OR inflation OR tariff OR semiconductor OR '
+        '"oil price" OR war OR earthquake OR earnings OR Thailand)')
+
+    # คำที่ใช้แยกธีมจากพาดหัวข่าว (ตัวเล็กทั้งหมด · ตรงกับ query ของแต่ละธีม)
+    WORLD_THEME_KEYWORDS = {
+        "conflict": ("war", "conflict", "airstrike", "invasion", "ceasefire",
+                     "military", "troops", "missile", "strike", "attack"),
+        "energy":   ("oil", "crude", "opec", "natural gas", "refinery",
+                     "petrol", "gasoline", "barrel", "pipeline"),
+        "inflation": ("inflation", "interest rate", "central bank", "federal reserve",
+                      "cpi", "rate cut", "rate hike", "monetary"),
+        "trade":    ("tariff", "trade war", "export ban", "sanction", "supply chain",
+                     "import", "export", "customs"),
+        "tech":     ("semiconductor", "artificial intelligence", " ai ", "chip",
+                     "data center", "nvidia", "software", "cloud"),
+        "market":   ("stock market", "equities", "bear market", "bull market",
+                     "selloff", "shares", "index", "wall street", "nasdaq", "s&p"),
+        "disaster": ("earthquake", "flood", "hurricane", "outbreak", "pandemic",
+                     "typhoon", "wildfire", "drought", "virus"),
+        "earnings": ("earnings", "quarterly results", "guidance", "profit warning",
+                     "revenue", "forecast cut", "beats estimates"),
+        "thailand": ("thailand", "thai ", "baht", "bangkok", "set index"),
+    }
+
     # --- Learning engine (เก็บข้อมูลสะสม → หาความสัมพันธ์ข่าว ↔ ราคา) ---
     LEARN_AUTO = os.environ.get("LEARN_AUTO", "1") == "1"          # เก็บ snapshot อัตโนมัติ
     LEARN_INTERVAL = int(os.environ.get("LEARN_INTERVAL", "3600"))  # ทุกกี่วินาที

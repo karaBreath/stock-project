@@ -152,66 +152,116 @@ def _day_of(stamp: str) -> str:
 # ---------------------------------------------------------------------------
 # 1) จุดข่าวบนแผนที่ (สำหรับลูกโลก 3D)
 # ---------------------------------------------------------------------------
-def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dict:
+def world_snapshot(timespan: str = "24h") -> dict:
     """
-    คืนจุดข่าวพร้อมพิกัดสำหรับปักบนลูกโลก
+    ดึงข่าวโลก **ครั้งเดียว** แล้วแยกธีมเองในเครื่อง → จุดสำหรับปักบนลูกโลก
 
-    ⚠️ GDELT ปิด GEO 2.0 API แล้ว (api/v2/geo/geo -> HTTP 404 ทุกแบบ
-    ยืนยันจากการทดสอบจริง 6 ครั้ง) จึงเปลี่ยนมาใช้ DOC 2.0 ArtList ที่ยังทำงานได้
-    แล้วนับข่าว "รายประเทศต้นทาง" (sourcecountry) วางจุดที่พิกัดกลางของประเทศนั้น
+    ทำไมต้องยิงครั้งเดียว (นี่คือหัวใจที่ทำให้ลูกโลกใช้งานได้จริง)
+    ------------------------------------------------------------
+    เดิมยิงธีมละครั้ง = 9 คำขอต่อการเปิดหน้าเดียว แต่ GDELT จำกัดอัตราแรงมาก
+    (วัดจริง: ยิงห่างกัน 8-25 วินาที ยังโดนปฏิเสธราวครึ่ง) โอกาสสำเร็จครบ 9 ครั้ง
+    ติดกันจึงแทบเป็นศูนย์ → ลูกโลกว่างเปล่าเป็นปกติ
 
-    ผลที่ได้หยาบกว่าเดิม (ระดับประเทศ ไม่ใช่ระดับเมือง) แต่ยังตอบโจทย์เดิมคือ
-    เห็นว่าเรื่องไหนกำลังร้อนอยู่ที่ไหนบนโลก
+    ตอนนี้ยิงคำค้นกว้าง ๆ ครั้งเดียว ได้ข่าวสูงสุด 250 ชิ้น แล้วอ่านพาดหัวเพื่อ
+    จัดเข้าธีมเอง (Config.WORLD_THEME_KEYWORDS) → โอกาสสำเร็จเท่ากับคำขอเดียว
+    และเร็วขึ้นราว 9 เท่า
+
+    ⚠️ GDELT ปิด GEO 2.0 API แล้ว (api/v2/geo/geo -> HTTP 404 ทุกแบบ ยืนยัน 6 ครั้ง)
+    จึงใช้ประเทศต้นทางข่าว (sourcecountry) วางจุดที่พิกัดกลางของประเทศนั้น
+    ผลหยาบระดับประเทศ ไม่ใช่ระดับเมืองเหมือนเดิม แต่ยังตอบโจทย์ "เรื่องไหนร้อนที่ไหน"
     """
-    color = "#4dd4ff"
-    label = "ข่าวทั่วโลก"
-    if theme and theme in Config.WORLD_THEMES:
-        label, q, color = Config.WORLD_THEMES[theme]
-        query = query or q
-    query = query or "stock market OR economy"
-
-    cache_key = f"gdelt:geo2:{theme}:{query}:{timespan}"
-    cached = cache_get(cache_key)
+    span = _clamp_timespan(timespan)
+    ck = f"gdelt:snap:{span}"
+    cached = cache_get(ck)
     if cached:
         return cached
 
-    out = {"theme": theme, "label": label, "color": color, "query": query,
-           "timespan": timespan, "points": [], "ok": False, "source": "artlist-country"}
-
-    # หน้าเว็บรอไม่ได้นาน -> ยิงครั้งเดียวพอ (ตัวเก็บเบื้องหลังจะลองซ้ำให้เอง)
     data = _fetch_json("doc/doc", {
-        "query": query,
+        "query": Config.WORLD_COMBINED_QUERY,
         "mode": "ArtList",
         "format": "json",
         "maxrecords": 250,
-        "timespan": timespan,
+        "timespan": span,
         "sort": "DateDesc",
-    }, retries=0)
+    }, retries=1)
 
     arts = (data or {}).get("articles") or []
     if not arts:
-        # ดึงสดไม่ได้ -> ใช้ของล่าสุดที่เคยได้ ดีกว่าโชว์หน้าว่าง
-        stale = cache_get(cache_key + ":last")
+        stale = cache_get(ck + ":last")
         if stale and stale.get("points"):
             stale = dict(stale)
             stale["stale"] = True
-            stale["note"] = (f"ดึงสดไม่ได้ตอนนี้ — แสดงข้อมูลที่เก็บไว้เมื่อ "
+            stale["note"] = ("ดึงสดไม่ได้ตอนนี้ — แสดงข้อมูลที่เก็บไว้เมื่อ "
                              f"{stale.get('fetched_at', 'ก่อนหน้านี้')}")
             return stale
-        out["error"] = (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
-                        if in_cooldown() else
-                        "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)")
-        return out
+        return {"ok": False, "points": [], "themes": [], "timespan": span,
+                "articles_seen": 0,
+                "error": (f"GDELT กำลังจำกัดอัตราการเรียก — พักอยู่อีก {cooldown_left()} วินาที"
+                          if in_cooldown() else
+                          "ดึงข้อมูล GDELT ไม่ได้ (network หรือโดนจำกัดอัตราการเรียก)")}
 
-    out["points"] = _points_from_articles(arts, color, theme)
-    out["ok"] = bool(out["points"])
-    out["total"] = len(out["points"])
-    out["articles_seen"] = len(arts)
-    out["fetched_at"] = dt.datetime.now().isoformat(timespec="minutes")
+    by_theme = _classify_articles(arts)
+    points, themes = [], []
+    for key, (label, _q, color) in Config.WORLD_THEMES.items():
+        pts = _points_from_articles(by_theme.get(key, []), color, key)
+        for p in pts:
+            p["theme"] = key
+        points.extend(pts)
+        themes.append({"key": key, "label": label, "color": color,
+                       "count": len(pts), "articles": len(by_theme.get(key, [])),
+                       "ok": bool(pts)})
+
+    out = {
+        "ok": bool(points),
+        "points": points,
+        "themes": themes,
+        "timespan": span,
+        "articles_seen": len(arts),
+        "unclassified": len(by_theme.get("_none", [])),
+        "source": "artlist-combined",
+        "fetched_at": dt.datetime.now().isoformat(timespec="minutes"),
+    }
     if out["ok"]:
-        cache_set(cache_key, out, Config.GDELT_CACHE_TTL)
-        cache_set(cache_key + ":last", out, LAST_GOOD_TTL)   # สำรองไว้ใช้ตอนดึงไม่ได้
+        cache_set(ck, out, Config.GDELT_CACHE_TTL)
+        cache_set(ck + ":last", out, LAST_GOOD_TTL)
     return out
+
+
+def _classify_articles(arts) -> dict:
+    """
+    จัดข่าวเข้าธีมจากคำในพาดหัว · 1 ข่าวเข้าได้หลายธีม (เช่นข่าวชิปโดนภาษี)
+    ข่าวที่ไม่เข้าธีมไหนเลยเก็บไว้ที่คีย์ '_none' เพื่อรายงานอย่างซื่อสัตย์
+    """
+    buckets = {}
+    for a in arts:
+        text = f" {(a.get('title') or '').lower()} "
+        hit = False
+        for key, words in Config.WORLD_THEME_KEYWORDS.items():
+            if any(w in text for w in words):
+                buckets.setdefault(key, []).append(a)
+                hit = True
+        if not hit:
+            buckets.setdefault("_none", []).append(a)
+    return buckets
+
+
+def world_points(query: str = "", timespan: str = "24h", theme: str = "") -> dict:
+    """จุดข่าวของธีมเดียว — หยิบจาก snapshot ที่ยิงครั้งเดียว (ไม่ยิงเพิ่ม)"""
+    snap = world_snapshot(timespan)
+    label, q, color = Config.WORLD_THEMES.get(
+        theme, ("ข่าวทั่วโลก", query or "", "#4dd4ff"))
+    pts = [p for p in snap.get("points", []) if not theme or p.get("theme") == theme]
+    return {
+        "theme": theme, "label": label, "color": color, "query": q,
+        "timespan": snap.get("timespan", timespan),
+        "points": pts, "ok": bool(pts), "total": len(pts),
+        "articles_seen": snap.get("articles_seen"),
+        "stale": snap.get("stale", False),
+        "note": snap.get("note"),
+        "error": snap.get("error") if not pts else None,
+        "source": snap.get("source"),
+        "fetched_at": snap.get("fetched_at"),
+    }
 
 
 def _points_from_articles(arts, color: str, theme: str = "") -> list:
@@ -264,44 +314,37 @@ def _links_from_html(html: str):
 
 def all_theme_points(timespan: str = "24h") -> dict:
     """
-    ดึงจุดข่าวของทุกธีมรวมกัน (ใช้ตอนเปิดหน้าลูกโลก)
+    จุดข่าวทุกธีมสำหรับหน้าลูกโลก — ใช้คำขอเดียว (ดู world_snapshot)
 
-    ทุกธีม = 1 คำขอต่อ GDELT ซึ่งช้า (~10 วิ) และมีโควตาจำกัด
-    จึงคืนเท่าที่ได้เสมอ ธีมไหนโดนจำกัดอัตราก็ข้ามไป (ไม่ทำให้ทั้งหน้าพัง)
-    ตัวเก็บข้อมูลเบื้องหลังจะอุ่น cache ไว้ให้ ผู้ใช้ส่วนใหญ่จึงเจอของที่พร้อมแล้ว
+    เดิมฟังก์ชันนี้วนยิงธีมละครั้ง = 9 คำขอ ซึ่งเป็นต้นเหตุที่ลูกโลกว่างเปล่า
+    เพราะพอคำขอแรกโดนปฏิเสธ ที่เหลือก็ล้มตามกันหมด
     """
-    themes = []
-    points = []
-    skipped = stale_count = 0
-    for key in Config.WORLD_THEMES:
-        res = world_points(theme=key, timespan=timespan)
-        if res.get("stale"):
-            stale_count += 1
-        if not res.get("ok") and not res.get("points"):
-            skipped += 1
-        themes.append({
-            "key": key,
-            "label": res["label"],
-            "color": res["color"],
-            "count": len(res["points"]),
-            "ok": res["ok"],
-        })
-        for p in res["points"]:
-            p["theme"] = key
-            points.append(p)
-    out = {"themes": themes, "points": points, "timespan": timespan,
-           "ok": bool(points), "skipped_themes": skipped,
-           "stale_themes": stale_count,
-           "fetched_at": dt.datetime.now().isoformat(timespec="seconds")}
+    snap = world_snapshot(timespan)
+    themes = snap.get("themes") or [
+        {"key": k, "label": v[0], "color": v[2], "count": 0, "ok": False}
+        for k, v in Config.WORLD_THEMES.items()
+    ]
+    empty = [t for t in themes if not t.get("count")]
+
     notes = []
-    if stale_count:
-        notes.append(f"{stale_count} ธีมแสดงข้อมูลที่เก็บไว้ก่อนหน้า (ดึงสดไม่ได้ตอนนี้)")
-    if skipped:
-        notes.append(f"{skipped} ธีมยังไม่มีข้อมูลเลย — GDELT จำกัดอัตราการเรียก "
-                     "ระบบจะทยอยเก็บให้เอง")
-    if notes:
-        out["note"] = " · ".join(notes)
-    return out
+    if snap.get("stale"):
+        notes.append(snap.get("note") or "แสดงข้อมูลที่เก็บไว้ก่อนหน้า (ดึงสดไม่ได้ตอนนี้)")
+    if snap.get("ok") and empty:
+        notes.append(f"{len(empty)} ธีมยังไม่มีข่าวเข้าเกณฑ์ในช่วงนี้")
+
+    return {
+        "themes": themes,
+        "points": snap.get("points", []),
+        "timespan": snap.get("timespan", timespan),
+        "ok": snap.get("ok", False),
+        "skipped_themes": len(empty) if snap.get("ok") else len(themes),
+        "stale_themes": len(themes) if snap.get("stale") else 0,
+        "articles_seen": snap.get("articles_seen"),
+        "unclassified": snap.get("unclassified"),
+        "error": snap.get("error"),
+        "note": " · ".join(notes) if notes else None,
+        "fetched_at": snap.get("fetched_at") or dt.datetime.now().isoformat(timespec="seconds"),
+    }
 
 
 def warm_cache(timespan: str = "24h") -> dict:

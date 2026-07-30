@@ -103,71 +103,137 @@ def test_during_cooldown_no_requests_are_sent(monkeypatch):
 # ---------------------------------------------------------------------------
 # 2) จุดบนลูกโลกต้องมาจาก ArtList + ประเทศ (ไม่ใช่ GEO ที่ตายแล้ว)
 # ---------------------------------------------------------------------------
-def test_world_points_uses_artlist_not_dead_geo_endpoint(monkeypatch):
-    used = {}
+ARTS = [
+    {"title": "Stock market rallies as inflation cools", "url": "http://a",
+     "sourcecountry": "United States"},
+    {"title": "Nvidia lifts capex on AI chip demand", "url": "http://b",
+     "sourcecountry": "United States"},
+    {"title": "New tariff package hits semiconductor imports", "url": "http://c",
+     "sourcecountry": "China"},
+    {"title": "Ceasefire talks stall as airstrikes continue", "url": "http://d",
+     "sourcecountry": "Israel"},
+    {"title": "Crude oil climbs on OPEC supply cut", "url": "http://e",
+     "sourcecountry": "Saudi Arabia"},
+    {"title": "Earthquake damages port infrastructure", "url": "http://f",
+     "sourcecountry": "Japan"},
+    {"title": "Thai baht firms as SET index gains", "url": "http://g",
+     "sourcecountry": "Thailand"},
+    {"title": "Retailer cuts full-year guidance after weak revenue", "url": "http://h",
+     "sourcecountry": "United Kingdom"},
+    {"title": "Local bakery wins award", "url": "http://i",          # ไม่เข้าธีมไหน
+     "sourcecountry": "France"},
+    {"title": "Report from an unmapped place", "url": "http://j",
+     "sourcecountry": "Neverland"},                                   # ประเทศไม่รู้จัก
+]
 
-    def fake_fetch(path, params, retries=2):
-        used["path"] = path
-        used["mode"] = params.get("mode")
-        return {"articles": [
-            {"title": "A", "url": "http://a", "sourcecountry": "United States"},
-            {"title": "B", "url": "http://b", "sourcecountry": "United States"},
-            {"title": "C", "url": "http://c", "sourcecountry": "Thailand"},
-            {"title": "D", "url": "http://d", "sourcecountry": "Neverland"},  # ไม่รู้จัก
-        ]}
+
+def _mock_one_request(monkeypatch, arts=None, store=None):
+    """ปลอมชั้น HTTP + นับจำนวนคำขอ เพื่อพิสูจน์ว่ายิงครั้งเดียวจริง"""
+    calls = {"n": 0}
+    store = store if store is not None else {}
+
+    def fake_fetch(path, params, retries=1, timeout=None):
+        calls["n"] += 1
+        assert path == "doc/doc", "ต้องไม่ใช้ geo/geo ที่ตอบ 404"
+        assert params.get("mode") == "ArtList"
+        return {"articles": ARTS if arts is None else arts}
 
     monkeypatch.setattr(G, "_fetch_json", fake_fetch)
-    monkeypatch.setattr(G, "cache_get", lambda k: None)
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
-
-    res = G.world_points(theme="market", timespan="24h")
-
-    assert used["path"] == "doc/doc"          # ไม่ใช่ "geo/geo" ที่ตอบ 404
-    assert used["mode"] == "ArtList"
-    assert res["ok"] and len(res["points"]) == 2       # ประเทศที่ไม่รู้จักถูกข้าม
-    top = res["points"][0]
-    assert top["name"] == "United States" and top["count"] == 2   # เรียงตามจำนวนข่าว
-    assert top["articles"][0]["url"] == "http://a"
+    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
+    return calls, store
 
 
-def test_world_points_reports_failure_instead_of_pretending(monkeypatch):
+def test_globe_uses_exactly_one_request_for_all_themes(monkeypatch):
+    """
+    หัวใจของการแก้ลูกโลก: ทุกธีมต้องมาจากคำขอเดียว
+
+    เดิมยิงธีมละครั้ง (9 ครั้ง) พอครั้งแรกโดนปฏิเสธ ที่เหลือล้มตามกันหมด
+    ลูกโลกจึงว่างเปล่า — เทสนี้กันไม่ให้กลับไปเป็นแบบนั้นอีก
+    """
+    calls, _ = _mock_one_request(monkeypatch)
+    res = G.all_theme_points(timespan="24h")
+
+    assert calls["n"] == 1, f"ต้องยิงครั้งเดียว แต่ยิง {calls['n']} ครั้ง"
+    assert res["ok"] and res["points"], "ต้องได้จุดมาวาด"
+    assert len(res["themes"]) == len(G.Config.WORLD_THEMES), "ต้องมีทุกธีมในผล"
+    assert res["articles_seen"] == len(ARTS)
+
+
+def test_articles_are_classified_into_right_themes(monkeypatch):
+    _mock_one_request(monkeypatch)
+    snap = G.world_snapshot("24h")
+    got = {t["key"]: t["count"] for t in snap["themes"]}
+
+    # ธีมที่มีข่าวชัดเจนในชุดทดสอบ ต้องมีจุด
+    for key in ("market", "inflation", "tech", "trade", "conflict",
+                "energy", "disaster", "thailand", "earnings"):
+        assert got.get(key, 0) > 0, f"ธีม {key} ควรมีจุดจากข่าวที่ให้ไป"
+    assert snap["unclassified"] >= 1, "ข่าวที่ไม่เข้าธีมต้องถูกนับไว้อย่างซื่อสัตย์"
+
+
+def test_theme_filter_does_not_fire_extra_requests(monkeypatch):
+    """กดกรองธีมบนหน้าเว็บ ต้องไม่ยิง GDELT เพิ่ม"""
+    calls, store = _mock_one_request(monkeypatch)
+    G.world_snapshot("24h")
+    before = calls["n"]
+
+    for key in G.Config.WORLD_THEMES:
+        r = G.world_points(theme=key, timespan="24h")
+        assert r["theme"] == key
+    assert calls["n"] == before, "การกรองธีมต้องใช้ข้อมูลเดิม ไม่ยิงใหม่"
+
+
+def test_unknown_country_skipped_and_counts_correct(monkeypatch):
+    _mock_one_request(monkeypatch)
+    snap = G.world_snapshot("24h")
+    names = {p["name"] for p in snap["points"]}
+    assert "Neverland" not in names, "ประเทศที่ไม่มีพิกัดต้องถูกข้าม"
+    assert "United States" in names and "Thailand" in names
+
+    us_market = [p for p in snap["points"]
+                 if p["name"] == "United States" and p["theme"] == "market"]
+    assert us_market and us_market[0]["count"] >= 1
+    assert us_market[0]["articles"], "ต้องมีลิงก์ข่าวให้คลิกดู"
+
+
+def test_globe_reports_failure_when_no_data_and_no_cache(monkeypatch):
     monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
     monkeypatch.setattr(G, "cache_get", lambda k: None)
-    res = G.world_points(theme="market")
-    assert res["ok"] is False and res["points"] == [] and res.get("error")
+    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
+    res = G.all_theme_points()
+    assert res["ok"] is False and res.get("error")
+    assert res["points"] == [] and len(res["themes"]) == len(G.Config.WORLD_THEMES)
+
+
+def test_globe_falls_back_to_last_good_snapshot(monkeypatch):
+    """ดึงสดไม่ได้ -> ต้องแสดง snapshot ล่าสุดที่เคยได้ พร้อมบอกว่าเป็นของเก่า"""
+    calls, store = _mock_one_request(monkeypatch)
+    first = G.all_theme_points("24h")
+    assert first["ok"] and not first.get("stale_themes")
+
+    store.pop("gdelt:snap:24h", None)                    # cache สดหมดอายุ
+    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)   # แล้วดึงสดล้ม
+
+    second = G.all_theme_points("24h")
+    assert len(second["points"]) == len(first["points"]), "ต้องได้จุดเดิมกลับมา"
+    assert second["stale_themes"] > 0 and second.get("note")
 
 
 def test_theme_points_offset_so_bars_do_not_overlap(monkeypatch):
     """สองธีมที่มีข่าวจากประเทศเดียวกัน ต้องไม่วางแท่งทับกันสนิท"""
-    arts = [{"title": "T", "url": "http://t", "sourcecountry": "Japan"}]
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: {"articles": arts})
-    monkeypatch.setattr(G, "cache_get", lambda k: None)
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
-
-    a = G.world_points(theme="conflict")["points"][0]
-    b = G.world_points(theme="tech")["points"][0]
+    arts = [
+        {"title": "War escalates in the region", "url": "http://w",
+         "sourcecountry": "Japan"},
+        {"title": "Chip maker expands data center", "url": "http://c",
+         "sourcecountry": "Japan"},
+    ]
+    _mock_one_request(monkeypatch, arts=arts)
+    snap = G.world_snapshot("24h")
+    a = [p for p in snap["points"] if p["theme"] == "conflict"][0]
+    b = [p for p in snap["points"] if p["theme"] == "tech"][0]
     assert (a["lat"], a["lon"]) != (b["lat"], b["lon"])
-    assert abs(a["lat"] - b["lat"]) < 6 and abs(a["lon"] - b["lon"]) < 6   # ยังอยู่ประเทศเดิม
-
-
-def test_all_theme_points_survives_partial_failure(monkeypatch):
-    """บางธีมโดนจำกัดอัตรา -> ต้องคืนของที่ได้ พร้อมบอกว่าขาดกี่ธีม"""
-    state = {"n": 0}
-
-    def flaky(path, params, retries=2):
-        state["n"] += 1
-        if state["n"] % 2:
-            return None
-        return {"articles": [{"title": "x", "url": "http://x",
-                              "sourcecountry": "France"}]}
-
-    monkeypatch.setattr(G, "_fetch_json", flaky)
-    monkeypatch.setattr(G, "cache_get", lambda k: None)
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
-
-    res = G.all_theme_points()
-    assert res["skipped_themes"] > 0
-    assert res["points"] and res.get("note")
+    assert abs(a["lat"] - b["lat"]) < 6 and abs(a["lon"] - b["lon"]) < 6
 
 
 # ---------------------------------------------------------------------------
@@ -360,25 +426,6 @@ def test_cooldown_only_after_repeated_failures(monkeypatch):
     G._fail_streak[0] = 0
 
 
-def test_globe_falls_back_to_last_good_data(monkeypatch):
-    """ดึงสดไม่ได้ -> ต้องแสดงของล่าสุดที่เคยได้ ไม่ใช่หน้าว่าง"""
-    store = {}
-    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
-
-    good = {"articles": [{"title": "T", "url": "http://t", "sourcecountry": "Japan"}]}
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: good)
-    first = G.world_points(theme="market", timespan="24h")
-    assert first["ok"] and first["points"] and not first.get("stale")
-
-    store.pop("gdelt:geo2:market:" + first["query"] + ":24h", None)   # cache สดหมดอายุ
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)       # แล้วดึงสดล้ม
-
-    second = G.world_points(theme="market", timespan="24h")
-    assert second["points"] == first["points"], "ต้องได้จุดเดิมกลับมา"
-    assert second["stale"] is True and second.get("note")
-
-
 def test_globe_still_reports_error_when_nothing_cached(monkeypatch):
     monkeypatch.setattr(G, "cache_get", lambda k: None)
     monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: None)
@@ -404,19 +451,3 @@ def test_timeline_falls_back_to_last_good(monkeypatch):
     assert b["series"] == a["series"] and b["stale"] is True
 
 
-def test_all_themes_reports_stale_count(monkeypatch):
-    store = {}
-    monkeypatch.setattr(G, "cache_get", lambda k: store.get(k))
-    monkeypatch.setattr(G, "cache_set", lambda k, v, ttl: store.__setitem__(k, v))
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: {
-        "articles": [{"title": "x", "url": "http://x", "sourcecountry": "France"}]})
-    G.all_theme_points()                                  # เก็บของดีไว้ก่อน
-
-    for k in [k for k in store if not k.endswith(":last")]:
-        store.pop(k)                                      # cache สดหมดอายุทุกธีม
-    monkeypatch.setattr(G, "_fetch_json", lambda *a, **k: None)
-
-    res = G.all_theme_points()
-    assert res["stale_themes"] == len(G.Config.WORLD_THEMES)
-    assert res["skipped_themes"] == 0 and res["points"]    # ยังมีจุดให้วาด
-    assert "เก็บไว้ก่อนหน้า" in res["note"]
