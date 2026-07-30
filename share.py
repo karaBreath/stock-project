@@ -192,12 +192,20 @@ def setup_domain(hostname: str, exe: str) -> bool:
     say("    ทำครั้งเดียวจบ ครั้งต่อไปเปิด share.bat ได้เลย")
     say("  " + "=" * 64)
 
-    _step(1, 3, "เข้าสู่ระบบ Cloudflare (เบราว์เซอร์จะเปิดขึ้นมาให้เลือกโดเมน)")
+    _step(1, 3, "เข้าสู่ระบบ Cloudflare")
+    say("      กำลังจะเกิดอะไรขึ้น:")
+    say("        · เบราว์เซอร์จะเปิดหน้า Cloudflare ขึ้นมาเอง")
+    say("        · ถ้ายังไม่ได้ล็อกอิน ให้ล็อกอินก่อน (สมัครฟรีได้ที่หน้านั้นเลย)")
+    say(f"        · จะมีรายชื่อโดเมนให้เลือก — กดเลือก '{'.'.join(hostname.split('.')[-2:])}'")
+    say("        · แล้วกดปุ่ม Authorize สีฟ้า")
+    say("      ทำเสร็จแล้วกลับมาที่หน้าต่างนี้ มันจะไปต่อเอง")
+    say()
     if subprocess.run([exe, "tunnel", "login"]).returncode != 0:
         die("เข้าสู่ระบบ Cloudflare ไม่สำเร็จ",
-            "ถ้าเบราว์เซอร์ไม่เปิด ให้คัดลอกลิงก์ที่ขึ้นในหน้าต่างนี้ไปเปิดเอง")
+            "ถ้าเบราว์เซอร์ไม่เปิดเอง ให้คัดลอกลิงก์ยาว ๆ ที่ขึ้นในหน้าต่างนี้",
+            "ไปวางในเบราว์เซอร์เอง แล้วรันไฟล์นี้ใหม่อีกครั้ง")
 
-    _step(2, 3, f"สร้าง tunnel ชื่อ '{name}'")
+    _step(2, 3, f"สร้าง tunnel ชื่อ '{name}' (ไม่ต้องทำอะไร รอสักครู่)")
     r = subprocess.run([exe, "tunnel", "create", name],
                        capture_output=True, text=True)
     blob = (r.stdout or "") + (r.stderr or "")
@@ -206,7 +214,7 @@ def setup_domain(hostname: str, exe: str) -> bool:
     if "already exists" in blob.lower():
         say(f"      มี tunnel ชื่อ '{name}' อยู่แล้ว — ใช้ตัวเดิม")
 
-    _step(3, 3, f"ชี้ {hostname} มาที่ tunnel นี้ (สร้าง DNS ให้อัตโนมัติ)")
+    _step(3, 3, f"ชี้ {hostname} มาที่ tunnel นี้ (ไม่ต้องทำอะไร รอสักครู่)")
     r = subprocess.run([exe, "tunnel", "route", "dns", name, hostname],
                        capture_output=True, text=True)
     blob = (r.stdout or "") + (r.stderr or "")
@@ -221,7 +229,7 @@ def setup_domain(hostname: str, exe: str) -> bool:
     say("  " + "=" * 64)
     say("    ตั้งโดเมนเรียบร้อย")
     say(f"    ต่อไปเปิด share.bat เฉย ๆ จะได้ลิงก์คงที่:  https://{hostname}")
-    say("    (DNS อาจใช้เวลาไม่กี่นาทีกว่าจะทั่วถึง)")
+    say("    (ถ้าเปิดแล้วยังไม่ขึ้น รออีก 2-3 นาที ระบบ DNS กำลังกระจายข้อมูล)")
     say("  " + "=" * 64)
     say()
     return True
