@@ -5,9 +5,13 @@
 (พอร์ต ฐานข้อมูล การเชื่อม MT5) อยู่บนเครื่องคุณเหมือนเดิม
 Cloudflare แค่ส่งต่อคำขอเข้ามา
 
-    python share.py                 เปิดแบบลิงก์สุ่ม (ไม่ต้องมีบัญชี Cloudflare)
-    python share.py --tunnel ชื่อ    ใช้ tunnel ที่ตั้งชื่อไว้ (โดเมนตัวเอง)
-    python share.py --no-lock       ปิดกุญแจ (อันตราย — ใครมีลิงก์ก็เข้าได้)
+    python share.py                        เปิดแบบลิงก์สุ่ม (ไม่ต้องมีบัญชี)
+    python share.py --setup-domain <โดเมน>  ตั้งโดเมนตัวเองครั้งแรก (ทำครั้งเดียว)
+    python share.py --tunnel <ชื่อ>          ใช้ tunnel ที่ตั้งชื่อไว้
+    python share.py --no-lock              ปิดกุญแจ (อันตราย)
+
+ลิงก์สุ่มจะเปลี่ยนทุกครั้งที่เปิด ทำให้ต้องส่งลิงก์ใหม่เข้ามือถือตลอด
+ตั้งโดเมนตัวเองครั้งเดียวแล้วลิงก์จะคงที่ตลอดไป (เช่น https://nebula.example.com)
 
 ⚠️ ความปลอดภัย: เปิด tunnel = ทุกคนที่ได้ลิงก์เห็นพอร์ตและ MT5 ของคุณ
 สคริปต์นี้จึงสุ่ม "กุญแจ" ให้อัตโนมัติและบังคับใช้เสมอ เว้นแต่สั่ง --no-lock เอง
@@ -75,6 +79,24 @@ def read_env() -> dict:
     return out
 
 
+def set_env(pairs: dict):
+    """เขียนค่าลง .env — ทับของเดิมถ้ามีคีย์นั้นอยู่แล้ว ไม่ให้ซ้ำซ้อน"""
+    lines = []
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8").splitlines()
+    left = dict(pairs)
+    out = []
+    for line in lines:
+        k = line.split("=", 1)[0].strip() if "=" in line else ""
+        if k in left:
+            out.append(f"{k}={left.pop(k)}")
+        else:
+            out.append(line)
+    for k, v in left.items():
+        out.append(f"{k}={v}")
+    ENV_FILE.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+
+
 def ensure_token(disabled: bool) -> str:
     """
     หากุญแจจาก .env ถ้าไม่มีก็สุ่มให้แล้วเขียนกลับ — ผู้ใช้ไม่ต้องคิดเอง
@@ -129,6 +151,80 @@ def download_cloudflared() -> str:
         CF_EXE.chmod(0o755)
     say("  โหลดเสร็จแล้ว")
     return str(CF_EXE)
+
+
+# ---------------------------------------------------------------------------
+# ตั้งโดเมนตัวเอง (ทำครั้งเดียว)
+# ---------------------------------------------------------------------------
+HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+                     r"(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+
+
+def _step(n, total, text):
+    say()
+    say(f"  [{n}/{total}] {text}")
+
+
+def setup_domain(hostname: str, exe: str) -> bool:
+    """
+    พาตั้งโดเมนตัวเองทีละขั้น แล้วจำค่าไว้ให้ครั้งต่อไปเปิดได้เลย
+
+    ทำ 3 อย่างผ่าน cloudflared:
+      1. login   — เปิดเบราว์เซอร์ให้เลือกโดเมนในบัญชี Cloudflare ของคุณ
+      2. create  — สร้าง tunnel พร้อมไฟล์กุญแจของมันเอง (เก็บในเครื่องคุณ)
+      3. route   — ชี้ชื่อโดเมนย่อยมาที่ tunnel นี้ (สร้าง DNS record ให้อัตโนมัติ)
+
+    เงื่อนไขเดียวที่ข้ามไม่ได้: โดเมนหลักต้องอยู่ในบัญชี Cloudflare
+    (แผนฟรีพอ ไม่ต้องเสียเงิน) เพราะ Cloudflare ต้องมีสิทธิ์แก้ DNS ให้
+    """
+    hostname = (hostname or "").strip().lower().rstrip(".")
+    if not HOST_RE.match(hostname):
+        die(f"ชื่อโดเมนไม่ถูกรูปแบบ: {hostname or '(ว่าง)'}",
+            "ต้องเป็นแบบเต็ม เช่น  nebula.example.com")
+
+    name = hostname.split(".")[0] or "nebula"
+    say()
+    say("  " + "=" * 64)
+    say(f"    ตั้งโดเมนตัวเอง: {hostname}")
+    say(f"    ชื่อ tunnel ที่จะสร้าง: {name}")
+    say("  " + "-" * 64)
+    say("    ต้องมี: บัญชี Cloudflare (ฟรี) และโดเมนหลักอยู่ในบัญชีนั้นแล้ว")
+    say("    ทำครั้งเดียวจบ ครั้งต่อไปเปิด share.bat ได้เลย")
+    say("  " + "=" * 64)
+
+    _step(1, 3, "เข้าสู่ระบบ Cloudflare (เบราว์เซอร์จะเปิดขึ้นมาให้เลือกโดเมน)")
+    if subprocess.run([exe, "tunnel", "login"]).returncode != 0:
+        die("เข้าสู่ระบบ Cloudflare ไม่สำเร็จ",
+            "ถ้าเบราว์เซอร์ไม่เปิด ให้คัดลอกลิงก์ที่ขึ้นในหน้าต่างนี้ไปเปิดเอง")
+
+    _step(2, 3, f"สร้าง tunnel ชื่อ '{name}'")
+    r = subprocess.run([exe, "tunnel", "create", name],
+                       capture_output=True, text=True)
+    blob = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0 and "already exists" not in blob.lower():
+        die("สร้าง tunnel ไม่สำเร็จ", blob.strip()[-400:])
+    if "already exists" in blob.lower():
+        say(f"      มี tunnel ชื่อ '{name}' อยู่แล้ว — ใช้ตัวเดิม")
+
+    _step(3, 3, f"ชี้ {hostname} มาที่ tunnel นี้ (สร้าง DNS ให้อัตโนมัติ)")
+    r = subprocess.run([exe, "tunnel", "route", "dns", name, hostname],
+                       capture_output=True, text=True)
+    blob = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0 and "already exists" not in blob.lower():
+        die(f"ชี้โดเมน {hostname} ไม่สำเร็จ", blob.strip()[-400:],
+            "",
+            "สาเหตุที่พบบ่อย: โดเมนหลักยังไม่ได้อยู่ในบัญชี Cloudflare นี้",
+            "ต้องเพิ่มโดเมนเข้า Cloudflare และย้าย nameserver ให้เรียบร้อยก่อน")
+
+    set_env({"SHARE_TUNNEL": name, "SHARE_HOSTNAME": hostname})
+    say()
+    say("  " + "=" * 64)
+    say("    ตั้งโดเมนเรียบร้อย")
+    say(f"    ต่อไปเปิด share.bat เฉย ๆ จะได้ลิงก์คงที่:  https://{hostname}")
+    say("    (DNS อาจใช้เวลาไม่กี่นาทีกว่าจะทั่วถึง)")
+    say("  " + "=" * 64)
+    say()
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +290,7 @@ def run_tunnel(exe: str, port: int, name: str, on_url):
     return proc
 
 
-def banner(url: str, token: str, port: int):
+def banner(url: str, token: str, port: int, fixed: bool = False):
     link = f"{url}/?k={token}" if token else url
     say()
     say("  " + "=" * 64)
@@ -202,6 +298,11 @@ def banner(url: str, token: str, port: int):
     say("  " + "-" * 64)
     say(f"    ลิงก์สำหรับเปิดจากมือถือ/ที่อื่น:")
     say(f"    {link}")
+    if fixed:
+        say("    (ลิงก์นี้คงที่ ไม่เปลี่ยนทุกครั้งที่เปิด — บันทึกไว้ในมือถือได้เลย)")
+    else:
+        say("    ⚠️ ลิงก์สุ่มนี้จะเปลี่ยนทุกครั้งที่เปิดใหม่")
+        say("       อยากได้ลิงก์คงที่: share.bat --setup-domain nebula.โดเมนคุณ")
     say()
     if token:
         say(f"    กุญแจ: {token}")
@@ -216,16 +317,23 @@ def banner(url: str, token: str, port: int):
     say()
 
 
+def _arg_after(args, flag):
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return ""
+
+
 def main():
     args = sys.argv[1:]
     no_lock = "--no-lock" in args
-    name = ""
-    if "--tunnel" in args:
-        i = args.index("--tunnel")
-        if i + 1 < len(args):
-            name = args[i + 1]
+    env = read_env()
 
-    port = int(read_env().get("PORT") or os.environ.get("PORT") or 5000)
+    # ชื่อ tunnel: จากคำสั่ง > ที่เคยตั้งไว้ใน .env > ไม่มี (ใช้ลิงก์สุ่ม)
+    name = _arg_after(args, "--tunnel") or env.get("SHARE_TUNNEL", "")
+    hostname = env.get("SHARE_HOSTNAME", "")
+    port = int(env.get("PORT") or os.environ.get("PORT") or 5000)
 
     say()
     say("  NEBULA — เปิดเว็บออกอินเทอร์เน็ตผ่าน Cloudflare")
@@ -236,9 +344,15 @@ def main():
         die("ยังไม่ได้ติดตั้งระบบ",
             "เปิด start.bat หนึ่งครั้งก่อน (มันจะติดตั้งให้เอง) แล้วค่อยเปิด share.bat")
 
-    token = ensure_token(no_lock)
     exe = find_cloudflared() or download_cloudflared()
 
+    if "--setup-domain" in args:
+        host = _arg_after(args, "--setup-domain")
+        setup_domain(host, exe)
+        say("  รัน share.bat อีกครั้งเพื่อเปิดใช้งานด้วยโดเมนนี้")
+        return
+
+    token = ensure_token(no_lock)
     say("  เปิดแอปในเครื่อง ...")
     app_proc = start_app(port, token)
     if not wait_until_up(port, app_proc):
@@ -259,7 +373,9 @@ def main():
     say("  กำลังเปิด tunnel ...")
     tun = run_tunnel(exe, port, name, lambda u: banner(u, token, port))
     if name:
-        banner(f"(โดเมนของ tunnel '{name}')", token, port)
+        # tunnel ที่ตั้งชื่อไว้ไม่พิมพ์ลิงก์ออกมา เพราะโดเมนถูกกำหนดไว้แล้ว
+        banner(f"https://{hostname}" if hostname else f"(tunnel '{name}')",
+               token, port, fixed=bool(hostname))
 
     try:
         while True:

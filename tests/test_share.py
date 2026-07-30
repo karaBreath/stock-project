@@ -192,3 +192,86 @@ def test_gives_up_when_health_never_answers(monkeypatch):
     monkeypatch.setattr(share.urllib.request, "urlopen",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("refused")))
     assert share.wait_until_up(5000, LiveProc(), seconds=3) is False
+
+
+# ---------------------------------------------------------------------------
+# ตั้งโดเมนตัวเอง — ลิงก์คงที่แทนลิงก์สุ่ม
+# ---------------------------------------------------------------------------
+def test_setup_runs_the_three_cloudflare_steps_in_order(monkeypatch, env_file):
+    """login -> create -> route dns · ผิดลำดับแล้วขั้นถัดไปจะล้ม"""
+    calls = []
+
+    class R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(share.subprocess, "run",
+                        lambda cmd, **kw: (calls.append(cmd), R())[1])
+    share.setup_domain("nebula.example.com", "cloudflared")
+
+    assert calls[0] == ["cloudflared", "tunnel", "login"]
+    assert calls[1] == ["cloudflared", "tunnel", "create", "nebula"]
+    assert calls[2] == ["cloudflared", "tunnel", "route", "dns",
+                        "nebula", "nebula.example.com"]
+
+
+def test_setup_remembers_the_domain_so_next_run_is_one_click(monkeypatch, env_file):
+    class R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(share.subprocess, "run", lambda cmd, **kw: R())
+    share.setup_domain("nebula.example.com", "cloudflared")
+
+    env = share.read_env()
+    assert env["SHARE_TUNNEL"] == "nebula"
+    assert env["SHARE_HOSTNAME"] == "nebula.example.com"
+
+
+def test_setup_reuses_an_existing_tunnel_instead_of_failing(monkeypatch, env_file):
+    """รันซ้ำต้องไม่พัง — คนกดสองรอบเป็นเรื่องปกติ"""
+    class R:
+        def __init__(self, rc=0, out=""):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = ""
+
+    def fake_run(cmd, **kw):
+        if "create" in cmd:
+            return R(1, "tunnel with name already exists")
+        return R(0)
+
+    monkeypatch.setattr(share.subprocess, "run", fake_run)
+    assert share.setup_domain("nebula.example.com", "cloudflared") is True
+
+
+@pytest.mark.parametrize("bad", ["", "nebula", "http://x.com", "ne bula.com", "-x.com"])
+def test_setup_rejects_bad_hostnames(monkeypatch, env_file, bad):
+    monkeypatch.setattr(share.subprocess, "run",
+                        lambda *a, **k: pytest.fail("ไม่ควรไปถึงขั้นเรียก cloudflared"))
+    with pytest.raises(SystemExit):
+        share.setup_domain(bad, "cloudflared")
+
+
+def test_env_writer_replaces_instead_of_duplicating(env_file):
+    share.set_env({"SHARE_TUNNEL": "a"})
+    share.set_env({"SHARE_TUNNEL": "b"})
+    text = env_file.read_text(encoding="utf-8")
+    assert text.count("SHARE_TUNNEL=") == 1 and "SHARE_TUNNEL=b" in text
+    assert "PORT=5000" in text, "ค่าเดิมอื่น ๆ ต้องไม่หาย"
+
+
+def test_fixed_link_is_shown_when_a_domain_is_set(capsys):
+    share.banner("https://nebula.example.com", "KEY", 5000, fixed=True)
+    out = capsys.readouterr().out
+    assert "https://nebula.example.com/?k=KEY" in out
+    assert "คงที่" in out
+
+
+def test_random_link_warns_that_it_changes_and_offers_the_fix(capsys):
+    share.banner("https://abc.trycloudflare.com", "KEY", 5000, fixed=False)
+    out = capsys.readouterr().out
+    assert "จะเปลี่ยนทุกครั้ง" in out
+    assert "--setup-domain" in out
