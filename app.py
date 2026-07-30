@@ -15,6 +15,28 @@ from database import init_db
 from routes.api import api
 
 
+def _bootstrap_learning(correlation):
+    """
+    เรียนรู้รอบแรกให้เองตอนบูต ถ้าคลังความรู้ยังว่าง
+
+    ทำไม: คะแนน catalyst และคอลัมน์ "ข่าวโลกตอนนี้" ในหน้าพอร์ต MT5 จะทำงาน
+    ได้ต่อเมื่อมีความสัมพันธ์ที่เรียนไว้แล้ว ก่อนหน้านี้ผู้ใช้ต้องกดปุ่มเอง
+    ซึ่งลืมได้ง่ายและทำให้ฟีเจอร์ดู "เสีย" ทั้งที่แค่ยังไม่ได้เริ่ม
+    (ทำครั้งเดียวต่อการบูต และเฉพาะตอนคลังว่างจริง ๆ)
+    """
+    from database import query
+    try:
+        row = query("SELECT COUNT(*) AS c FROM correlations", one=True) or {}
+        if (row.get("c") or 0) > 0:
+            return
+        print("[learn] คลังความรู้ว่าง — เริ่มเรียนรู้รอบแรกอัตโนมัติ", flush=True)
+        res = correlation.learn_watchlist(limit=12)
+        found = sum(1 for r in res.get("learned", []) if r.get("ok"))
+        print(f"[learn] เรียนรู้รอบแรกเสร็จ: สำเร็จ {found}/{res.get('count')} ตัว", flush=True)
+    except Exception as e:
+        print(f"[learn] เรียนรู้รอบแรกไม่สำเร็จ: {e}", flush=True)
+
+
 def _start_collector():
     """
     เธรดเบื้องหลังของ 'ตัวเรียนรู้' — เก็บ snapshot ข่าวโลก + ราคา เป็นระยะ
@@ -28,6 +50,7 @@ def _start_collector():
         # หน่วงตอนเริ่ม เพื่อไม่ให้แย่ง resource ตอนแอปเพิ่งบูต
         time.sleep(20)
         from services import correlation
+        _bootstrap_learning(correlation)
         while True:
             try:
                 res = correlation.snapshot()

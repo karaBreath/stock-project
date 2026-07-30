@@ -33,12 +33,22 @@ jobs:
             echo "!! เว็บไม่ตอบภายใน ~6 นาที — อาจ URL ไม่ตรงหรือ deploy ล้ม"
             exit 0
           fi
+
           echo
-          echo "== /api/defaults (เช็คว่าเป็นเวอร์ชันไหน) =="
-          curl -s -m 60 "$BASE/api/defaults" || true
+          echo "== เมนูที่ควรมีครบ =="
+          curl -s -m 60 "$BASE/" | grep -o "data-go=\"[a-z0-9]*\"" | sort -u | tr '\n' ' '
           echo
-          echo "== /api/lab/strategies (ฟีเจอร์ล่าสุดต้องมี) =="
-          curl -s -m 60 "$BASE/api/lab/strategies" | head -c 300 || true
+
+          echo
+          echo "== ความรู้ที่เครื่องเรียนได้แล้ว (ควร > 0 หลังบูตสักพัก) =="
+          curl -s -m 90 "$BASE/api/learn/status" || true
+          echo
+
+          echo
+          echo "== สะพานเชื่อมระบบเทรด MT5 =="
+          curl -s -m 60 "$BASE/api/ve/status" || true
+          echo
+
           echo
           echo "== SELFCHECK เต็มชุด (ใช้เวลาราว 1 นาที) =="
           curl -s -m 300 "$BASE/api/selfcheck?format=text" || echo "selfcheck ยิงไม่สำเร็จ"
