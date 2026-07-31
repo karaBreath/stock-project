@@ -28,6 +28,10 @@ IS_WIN = platform.system() == "Windows"
 VENV_PY = BASE / "venv" / ("Scripts/python.exe" if IS_WIN else "bin/python")
 APP_TITLE = "เทรดข่าวโลก"
 
+# ปกติหน้าต่างนี้จะเปิดโปรแกรมให้เองทันที ตั้งตัวแปรนี้เป็น 1 เพื่อไม่ให้เปิด
+# (ใช้ตอนทดสอบ — ไม่งั้นการสร้างหน้าต่างเพื่อเช็กปุ่มจะไปสตาร์ตเซิร์ฟเวอร์จริง)
+NO_AUTOSTART = os.environ.get("NEBULA_NO_AUTOSTART") == "1"
+
 BG = "#0b0d1a"
 CARD = "#141834"
 LINE = "#2a3160"
@@ -85,7 +89,31 @@ class App:
         self._build()
         self.root.after(200, self._drain)
         self.root.after(400, self._tick)
+        self.root.after(600, self._autostart)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _autostart(self):
+        """
+        เปิดโปรแกรมให้เองทันทีที่หน้าต่างขึ้น
+
+        เดิมดับเบิลคลิกไอคอนแล้วยังต้องกด "เปิดโปรแกรม" อีกที ซึ่งเป็นขั้นที่
+        ไม่ได้ให้เลือกอะไรเลย มีอยู่ทางเดียวคือกด — เป็นด่านเปล่า ๆ ที่ทำให้
+        รู้สึกว่าเปิดยาก ตอนนี้ตัดทิ้ง เหลือดับเบิลคลิกครั้งเดียวจบ
+        ปุ่มยังอยู่ครบสำหรับคนที่ปิดแล้วอยากเปิดใหม่
+        """
+        if NO_AUTOSTART:
+            return
+
+        def worker():
+            # เช็กก่อนว่าเปิดค้างอยู่แล้วไหม ถ้าเปิดอยู่แล้วไปสตาร์ตซ้ำ
+            # พอร์ตจะชนกันเอง แล้วผู้ใช้จะเห็น error ที่ไม่ได้ทำอะไรผิด
+            if is_up(self.port):
+                self.say("โปรแกรมเปิดค้างอยู่แล้ว — เด้งหน้าเว็บให้เลย")
+                webbrowser.open(f"http://127.0.0.1:{self.port}")
+                return
+            self.root.after(0, self.do_start)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ---------------- หน้าตา ----------------
     def _set_window_icon(self):

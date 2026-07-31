@@ -14,9 +14,11 @@ on:
     branches: ["**"]
     paths:
       - "setup.ps1"
+      - "install.bat"
       - "gui.py"
       - "gui.bat"
       - "services/desktop.py"
+      - "เริ่มตรงนี้.md"
       - ".github/workflows/windows-check.yml"
 
 jobs:
@@ -49,16 +51,74 @@ jobs:
           }
           Write-Host "  setup.ps1 parses OK - $($tokens.Count) tokens"
 
-      - name: "2) gui.bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
+      - name: "2) ไฟล์ .bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
         shell: powershell
         run: |
-          $bytes = [IO.File]::ReadAllBytes("$PWD\gui.bat")
-          if ($bytes | Where-Object { $_ -gt 127 }) { throw "gui.bat contains non-ASCII bytes" }
-          $text = [IO.File]::ReadAllText("$PWD\gui.bat")
-          $crlf = ([regex]::Matches($text, "`r`n")).Count
-          $lf   = ([regex]::Matches($text, "`n")).Count
-          if ($crlf -ne $lf) { throw "gui.bat has lines not ending in CRLF" }
-          Write-Host "  gui.bat OK - $crlf CRLF lines"
+          foreach ($name in @('gui.bat', 'install.bat')) {
+            $path = Join-Path $PWD $name
+            $bytes = [IO.File]::ReadAllBytes($path)
+            if ($bytes | Where-Object { $_ -gt 127 }) { throw "$name contains non-ASCII bytes" }
+            $text = [IO.File]::ReadAllText($path)
+            $crlf = ([regex]::Matches($text, "`r`n")).Count
+            $lf   = ([regex]::Matches($text, "`n")).Count
+            if ($crlf -ne $lf) { throw "$name has lines not ending in CRLF" }
+            Write-Host "  $name OK - $crlf CRLF lines"
+          }
+
+      # -------------------------------------------------------------------
+      # The line the user pastes into the Run box is the single most fragile
+      # thing shipped: nobody can test it before pasting, and when it fails to
+      # parse the window closes instantly with no message. Parse it here, from
+      # the guide itself, so a broken line can never reach a user again.
+      - name: "2b) บรรทัดเดียวในคู่มือต้อง parse ผ่าน และต้องไม่มีเครื่องหมายคำพูด"
+        shell: powershell
+        run: |
+          # The guide has a Thai filename. Never write it literally here --
+          # GitHub saves this step as UTF-8 without a BOM and PowerShell 5.1
+          # reads .ps1 as ANSI, which mangles Thai into a syntax error.
+          $guide = Get-ChildItem -Path $PWD -Filter *.md |
+                   Where-Object { $_.Name -ne 'README.md' } |
+                   Select-Object -First 1
+          if (-not $guide) { throw "guide markdown not found" }
+          Write-Host "  guide: $($guide.Name)"
+
+          $line = [IO.File]::ReadAllLines($guide.FullName, [Text.Encoding]::UTF8) |
+                  Where-Object { $_ -like 'powershell *' } |
+                  Select-Object -First 1
+          if (-not $line) { throw "no one-line command found in the guide" }
+          Write-Host "  line  : $line"
+
+          # A curly quote pasted from a chat app is the failure this guards.
+          # The only safe rule is: no double quotes of any shape at all.
+          # U+201C and U+201D are the curly quotes, matched as escapes on
+          # purpose: typing them literally would make this very step
+          # non-ASCII, which is the other way PowerShell 5.1 breaks here.
+          if ($line -match '["\u201C\u201D]') {
+            throw "the one-liner must contain no double quotes - they get mangled when copied"
+          }
+          if ($line -notmatch 'SecurityProtocol') {
+            throw "the one-liner must force TLS 1.2 or PowerShell 5.1 cannot reach GitHub"
+          }
+          # The Run box silently truncates at 259 characters, so an over-long
+          # line pastes and runs but executes only half of itself.
+          if ($line.Length -gt 259) {
+            throw "the one-liner is $($line.Length) chars - the Run box cuts it off at 259"
+          }
+
+          $marker = '-Command '
+          $idx = $line.IndexOf($marker)
+          if ($idx -lt 0) { throw "the one-liner has no -Command" }
+          $inner = $line.Substring($idx + $marker.Length)
+
+          $errors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseInput(
+            $inner, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host "  $($_.Message)" }
+            throw "the one-liner has $($errors.Count) syntax error(s)"
+          }
+          Write-Host "  one-liner parses OK - $($tokens.Count) tokens"
 
       # -------------------------------------------------------------------
       - name: "3) สร้างไอคอนบนหน้าจอจริง แล้วต้องมีไฟล์ .lnk โผล่จริง"
@@ -112,6 +172,9 @@ jobs:
           # ถ้าไม่บังคับ UTF-8 การ print ข้อความไทยจะโยน UnicodeEncodeError
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
+          # หน้าต่างจริงจะเปิดเซิร์ฟเวอร์ให้เองทันทีที่ขึ้น ในที่นี้ไม่เอา
+          # ไม่งั้นแค่สร้างหน้าต่างเพื่อนับปุ่มก็จะไปสตาร์ต launcher.py จริง
+          NEBULA_NO_AUTOSTART: "1"
         run: |
           pip install -q -r requirements.txt
           pip install -q pillow
@@ -141,6 +204,11 @@ jobs:
           for t in labels:
               print(f"    - {t}")
           assert len(labels) >= 9, f"ปุ่มหายไป เหลือแค่ {len(labels)}"
+
+          # ดับเบิลคลิกไอคอนแล้วต้องเปิดเองเลย ไม่ต้องกดปุ่มซ้ำ
+          assert hasattr(app, "_autostart"), "หายไปแล้ว: การเปิดอัตโนมัติ"
+          assert gui.NO_AUTOSTART, "ตัวแปรกันเปิดอัตโนมัติในเทสต์ไม่ทำงาน"
+          assert not app.procs, "ไม่ควรมีอะไรถูกสตาร์ตตอน NEBULA_NO_AUTOSTART=1"
 
           time.sleep(1)
           root.update()
