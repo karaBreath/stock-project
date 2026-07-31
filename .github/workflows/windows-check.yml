@@ -172,6 +172,9 @@ jobs:
           # ถ้าไม่บังคับ UTF-8 การ print ข้อความไทยจะโยน UnicodeEncodeError
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
+          # หน้าต่างจริงจะเปิดเซิร์ฟเวอร์ให้เองทันทีที่ขึ้น ในที่นี้ไม่เอา
+          # ไม่งั้นแค่สร้างหน้าต่างเพื่อนับปุ่มก็จะไปสตาร์ต launcher.py จริง
+          NEBULA_NO_AUTOSTART: "1"
         run: |
           pip install -q -r requirements.txt
           pip install -q pillow
@@ -201,6 +204,11 @@ jobs:
           for t in labels:
               print(f"    - {t}")
           assert len(labels) >= 9, f"ปุ่มหายไป เหลือแค่ {len(labels)}"
+
+          # ดับเบิลคลิกไอคอนแล้วต้องเปิดเองเลย ไม่ต้องกดปุ่มซ้ำ
+          assert hasattr(app, "_autostart"), "หายไปแล้ว: การเปิดอัตโนมัติ"
+          assert gui.NO_AUTOSTART, "ตัวแปรกันเปิดอัตโนมัติในเทสต์ไม่ทำงาน"
+          assert not app.procs, "ไม่ควรมีอะไรถูกสตาร์ตตอน NEBULA_NO_AUTOSTART=1"
 
           time.sleep(1)
           root.update()

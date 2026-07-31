@@ -96,6 +96,55 @@ def test_prefers_pythonw_so_no_black_window_appears(script):
     assert "pythonw.exe" in text
 
 
+def test_installs_python_by_itself(script):
+    """
+    การลง Python เองคือขั้นที่คนเลิกล้มกลางทางมากที่สุด — หน้าโหลดมีหลายปุ่ม
+    และช่องที่สำคัญจริง ๆ (Add python.exe to PATH) พลาดง่ายมาก พลาดแล้ว
+    ทุกอย่างหลังจากนั้นพังโดยไม่บอกสาเหตุ ต้องลงให้เองผ่าน winget
+    """
+    text = script.decode("ascii")
+    assert "winget install" in text, "ต้องลง Python ให้เองไม่ใช่โยนหน้าเว็บให้"
+    assert "Python.Python" in text, "ต้องระบุแพ็กเกจ Python ของ winget"
+    assert "--silent" in text, "ต้องลงแบบไม่ต้องกดอะไร"
+    # winget อัปเดต PATH ให้เฉพาะโปรเซสที่เปิดใหม่ ถ้าไม่โหลด PATH ซ้ำ
+    # หน้าต่างนี้จะยังหา Python ไม่เจอ แล้วต้องให้ผู้ใช้วางบรรทัดซ้ำอีกรอบ
+    assert "GetEnvironmentVariable('Path'" in text, "ต้องโหลด PATH ใหม่หลังลงเสร็จ"
+
+
+def test_python_lookup_does_not_go_stale_every_year(script):
+    """
+    ลิสต์เวอร์ชันแบบตายตัวจะหมดอายุทุกเดือนตุลาคม แล้วอาการที่ออกมาคือ
+    'ไม่มี Python' บนเครื่องที่มี Python อยู่ชัด ๆ — ต้องไล่อ่านโฟลเดอร์เอา
+    """
+    text = script.decode("ascii")
+    assert "Get-ChildItem $progs" in text, "ต้องไล่อ่านโฟลเดอร์ ไม่ใช่ลิสต์เวอร์ชันตายตัว"
+
+
+# ---------------------------------------------------------------------------
+# หน้าต่างควบคุมต้องเปิดโปรแกรมให้เอง — ดับเบิลคลิกครั้งเดียวจบ
+# ---------------------------------------------------------------------------
+def test_gui_opens_the_app_without_pressing_anything():
+    """
+    เดิมดับเบิลคลิกไอคอนแล้วยังต้องกด 'เปิดโปรแกรม' อีกที ซึ่งเป็นขั้นที่
+    ไม่ได้ให้เลือกอะไรเลย มีทางเดียวคือกด — เป็นด่านเปล่า ๆ ที่ต้องตัดทิ้ง
+    """
+    with open(os.path.join(BASE, "gui.py"), encoding="utf-8") as f:
+        text = f.read()
+    assert "_autostart" in text, "หน้าต่างต้องเปิดโปรแกรมให้เอง"
+    assert "self.root.after(600, self._autostart)" in text, "ต้องถูกเรียกจริงตอนสร้างหน้าต่าง"
+    # ถ้าไม่มีสวิตช์ปิด การสร้างหน้าต่างเพื่อทดสอบจะไปสตาร์ตเซิร์ฟเวอร์จริง
+    assert "NEBULA_NO_AUTOSTART" in text, "ต้องมีสวิตช์ปิดไว้ใช้ตอนทดสอบ"
+
+
+def test_gui_does_not_start_twice_over_a_running_server():
+    """เปิดซ้ำทับตัวที่รันอยู่ = พอร์ตชนกัน ผู้ใช้เห็น error ทั้งที่ไม่ได้ทำอะไรผิด"""
+    with open(os.path.join(BASE, "gui.py"), encoding="utf-8") as f:
+        text = f.read()
+    start = text.index("def _autostart")
+    body = text[start:start + 1200]
+    assert "is_up(self.port)" in body, "ต้องเช็กก่อนว่ามีตัวที่เปิดค้างอยู่ไหม"
+
+
 # ---------------------------------------------------------------------------
 # ทางเข้าแบบสั่งตรงของ services/desktop.py (setup.ps1 เรียกตัวนี้)
 # ---------------------------------------------------------------------------

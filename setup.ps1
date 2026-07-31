@@ -173,23 +173,61 @@ function Find-Python {
     }
   }
   # The Windows Store stub named python.exe exits non-zero and opens the
-  # Store instead of running anything, so check the usual real install paths.
-  foreach ($p in @(
-      "$home_\AppData\Local\Programs\Python\Python313\python.exe",
-      "$home_\AppData\Local\Programs\Python\Python312\python.exe",
-      "$home_\AppData\Local\Programs\Python\Python311\python.exe",
-      "$home_\AppData\Local\Programs\Python\Python310\python.exe",
-      "C:\Python313\python.exe", "C:\Python312\python.exe",
-      "C:\Python311\python.exe", "C:\Python310\python.exe")) {
+  # Store instead of running anything, so check the real install paths too.
+  # Scan the folder rather than listing versions: a hardcoded list goes stale
+  # every October and the failure looks like "Python is not installed" on a
+  # machine where it plainly is.
+  $progs = Join-Path $home_ 'AppData\Local\Programs\Python'
+  $dirs = Get-ChildItem $progs -Directory -ErrorAction SilentlyContinue |
+          Sort-Object Name -Descending
+  foreach ($d in $dirs) {
+    $p = Join-Path $d.FullName 'python.exe'
+    if (Test-Path $p) { return $p }
+  }
+  foreach ($p in @("C:\Python313\python.exe", "C:\Python312\python.exe",
+                   "C:\Python311\python.exe", "C:\Python310\python.exe")) {
     if (Test-Path $p) { return $p }
   }
   return $null
 }
 
 $py = Find-Python
+
+if (-not $py) {
+  # Installing Python by hand is the step people give up on: the download
+  # page has several buttons, and the one checkbox that actually matters
+  # ("Add python.exe to PATH") is easy to miss -- and missing it means
+  # nothing works afterwards, with no hint as to why. winget ships with
+  # Windows 10 1809+ and Windows 11, so just do it here.
+  Say ""
+  Say "Python is not installed yet. Installing it now -- this takes"
+  Say "2-4 minutes and needs no clicks. Please leave this window open."
+  $winget = Get-Command winget -ErrorAction SilentlyContinue
+  if ($winget) {
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'   # winget writes to stderr when it is fine
+    try {
+      & winget install --id Python.Python.3.12 --source winget --scope user `
+          --accept-package-agreements --accept-source-agreements --silent |
+        Out-Null
+    } catch { }
+    $ErrorActionPreference = $old
+
+    # winget only puts Python on the PATH of processes started after it, so
+    # this window still cannot see it. Reload PATH instead of asking the user
+    # to run the line a second time.
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
+                [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $py = Find-Python
+    if ($py) { Say "Python installed." }
+  } else {
+    Say "winget is not available on this Windows version."
+  }
+}
+
 if (-not $py) {
   Write-Host ""
-  Write-Host "  [X] Python is not installed on this PC." -ForegroundColor Red
+  Write-Host "  [X] Could not install Python automatically." -ForegroundColor Red
   Write-Host "      Opening the download page now." -ForegroundColor Yellow
   Write-Host "      IMPORTANT: tick 'Add python.exe to PATH' during setup," -ForegroundColor Yellow
   Write-Host "      then run this same line again." -ForegroundColor Yellow
