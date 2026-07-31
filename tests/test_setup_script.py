@@ -159,17 +159,105 @@ def test_no_thai_inside_powershell_workflow_steps():
         + "\n  ".join(problems))
 
 
+def _guide_text():
+    with open(os.path.join(BASE, "เริ่มตรงนี้.md"), encoding="utf-8") as f:
+        return f.read()
+
+
+def _one_liner():
+    """บรรทัดคำสั่งใน code block ของคู่มือ (บรรทัดที่ขึ้นต้นด้วย powershell)"""
+    for line in _guide_text().splitlines():
+        if line.startswith("powershell "):
+            return line
+    return None
+
+
 def test_one_line_command_in_the_guide_matches_this_file():
     """
     ถ้าลิงก์ในคู่มือกับชื่อไฟล์จริงไม่ตรงกัน ผู้ใช้จะได้ 404
     และนั่นคืออาการ 'หาไม่เจอ เปิดไม่ได้' ที่พยายามแก้อยู่พอดี
     """
-    guide = os.path.join(BASE, "เริ่มตรงนี้.md")
-    with open(guide, encoding="utf-8") as f:
-        text = f.read()
+    line = _one_liner()
+    assert line, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
 
-    m = re.search(r"raw\.githubusercontent\.com/(\S+?)\s*\|", text)
-    assert m, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
+    m = re.search(r"raw\.githubusercontent\.com/([^\s)}|]+)", line)
+    assert m, "คำสั่งบรรทัดเดียวต้องชี้ไปที่ raw.githubusercontent.com"
     url_path = m.group(1)
     assert url_path.endswith("setup.ps1")
     assert url_path.startswith("karaBreath/stock-project/main/")
+
+
+def test_one_line_command_has_no_double_quotes():
+    """
+    เกิดขึ้นจริงกับผู้ใช้: ก๊อปคำสั่งจากแชท แล้ว " ถูกเปลี่ยนเป็นอัญประกาศโค้ง
+    PowerShell parse ไม่ผ่าน หน้าต่างเด้งแวบเดียวแล้วปิด = 'ใช้ไม่ได้'
+    ทางแก้คือคำสั่งต้องไม่มี " เลย จะได้ไม่มีอะไรให้ก๊อปเพี้ยน
+    """
+    line = _one_liner()
+    assert line, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
+    for ch in ('"', "“", "”"):
+        assert ch not in line, f"คำสั่งบรรทัดเดียวห้ามมี {ch!r}"
+
+
+def test_one_line_command_forces_tls12_and_shows_errors():
+    """
+    PowerShell 5.1 ต่อ TLS 1.0 ก่อน แต่ GitHub ไม่รับ -> โหลดไม่ผ่านตั้งแต่แรก
+    และถ้าไม่ดัก error หน้าต่างจะปิดทิ้งจนไม่มีอะไรให้อ่าน
+    """
+    line = _one_liner()
+    assert line, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
+    assert "SecurityProtocol" in line, "ต้องบังคับ TLS ก่อนโหลด"
+    # 3072 คือค่าตัวเลขของ Tls12 — ใช้เลขเพื่อให้บรรทัดสั้นพอลงช่อง Run
+    assert ("3072" in line or "Tls12" in line), "ต้องตั้งเป็น TLS 1.2"
+    assert "catch" in line, "ต้องดัก error ไว้"
+    assert "Read-Host" in line, "ต้องค้างหน้าต่างไว้ให้ผู้ใช้อ่าน error"
+
+
+def test_one_line_command_fits_the_windows_run_box():
+    """
+    ช่อง Windows + R รับได้ 259 ตัวอักษร เกินกว่านั้นจะถูกตัดท้ายทิ้งเงียบ ๆ
+    ผู้ใช้จะวางแล้วกด Enter ได้ตามปกติ แต่คำสั่งที่รันจริงขาดไปครึ่งท่อน
+    """
+    line = _one_liner()
+    assert line, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
+    assert len(line) <= 259, f"คำสั่งยาว {len(line)} ตัวอักษร เกินช่อง Run"
+
+
+def test_setup_script_holds_the_window_open_on_failure(script):
+    """
+    สคริปต์ถูกเปิดจากช่อง Run พอ throw หน้าต่างหายไปพร้อมกัน
+    ผู้ใช้เลยเห็นแค่ไฟแวบ ต้องมี trap ที่ค้างหน้าต่างไว้เสมอ
+    """
+    text = script.decode("ascii")
+    assert "trap {" in text, "ต้องมี trap ครอบ ไม่งั้น error จะหายไปกับหน้าต่าง"
+    assert "Tls12" in text, "ต้องบังคับ TLS 1.2 ก่อนโหลด zip"
+
+
+# ---------------------------------------------------------------------------
+# install.bat — ทางเลือกแบบไม่ต้องพิมพ์อะไรเลย (ดับเบิลคลิกอย่างเดียว)
+# ---------------------------------------------------------------------------
+INSTALL_BAT = os.path.join(BASE, "install.bat")
+
+
+def test_install_bat_exists():
+    """คู่มือบอกให้โหลดไฟล์นี้ ถ้าไม่มีจริงผู้ใช้จะได้ 404 ซ้ำอาการเดิม"""
+    assert os.path.exists(INSTALL_BAT)
+    assert "install.bat" in _guide_text(), "คู่มือต้องบอกทางเลือกนี้ด้วย"
+
+
+def test_install_bat_is_pure_ascii():
+    """คอนโซล Windows ไม่มีฟอนต์ไทย ข้อความไทยจะกลายเป็นกล่องสี่เหลี่ยม"""
+    with open(INSTALL_BAT, "rb") as f:
+        raw = f.read()
+    bad = [i + 1 for i, ln in enumerate(raw.split(b"\n"))
+           if any(b > 127 for b in ln)]
+    assert not bad, f"install.bat มีอักขระที่ไม่ใช่ ASCII ที่บรรทัด {bad}"
+
+
+def test_install_bat_pauses_so_errors_stay_readable():
+    """เหตุผลเดียวที่ไฟล์นี้มีอยู่: หน้าต่างต้องไม่ปิดเองก่อนได้อ่าน"""
+    with open(INSTALL_BAT, encoding="ascii") as f:
+        text = f.read()
+    assert "pause" in text
+    assert "Tls12" in text, "ต้องบังคับ TLS 1.2 ไม่งั้นโหลดไม่ผ่านบน PS 5.1"
+    assert "main/setup.ps1" in text, "ต้องดึง setup.ps1 จาก main"

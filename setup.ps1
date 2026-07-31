@@ -1,7 +1,11 @@
 # NEBULA one-line installer / launcher
 #
-# Paste this into the Windows Run box (Win + R):
-#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/karaBreath/stock-project/main/setup.ps1 | iex"
+# Paste this into the Windows Run box (Win + R). It deliberately contains no
+# double quotes: chat apps and rendered docs turn " into a curly quote, and a
+# curly quote makes PowerShell fail to parse the line and close instantly.
+#   powershell -nop -exec Bypass -Command try{[Net.ServicePointManager]::SecurityProtocol=3072;iex(irm https://raw.githubusercontent.com/karaBreath/stock-project/main/setup.ps1)}catch{$_;Read-Host}
+#
+# Or, with nothing to type at all: download install.bat and double-click it.
 #
 # It finds the project folder wherever it already is, installs it if it is not
 # there yet, updates it, puts an icon on the desktop, and opens the app window.
@@ -14,10 +18,36 @@ $ErrorActionPreference = 'Stop'
 $REPO = 'https://github.com/karaBreath/stock-project.git'
 $ZIP  = 'https://codeload.github.com/karaBreath/stock-project/zip/refs/heads/main'
 
+# Windows PowerShell 5.1 still negotiates TLS 1.0 first on many machines, and
+# GitHub refuses it. Without this, every download below dies with a bare
+# "Could not create SSL/TLS secure channel".
+try {
+  [Net.ServicePointManager]::SecurityProtocol =
+    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch { }
+
 function Say([string]$m) { Write-Host "  $m" }
 function Die([string]$m) {
   Write-Host ""
   Write-Host "  [X] $m" -ForegroundColor Red
+  Write-Host ""
+  Read-Host "  Press Enter to close"
+  exit 1
+}
+
+# The window is launched by the Run box, so when this script throws the window
+# vanishes with it and the user is left with a flash and no message. Catch
+# everything, show it, and hold the window open so there is something to read
+# (and to screenshot).
+trap {
+  Write-Host ""
+  Write-Host "  [X] Setup stopped with an unexpected error:" -ForegroundColor Red
+  Write-Host "      $($_.Exception.Message)" -ForegroundColor Red
+  if ($_.InvocationInfo) {
+    Write-Host "      (line $($_.InvocationInfo.ScriptLineNumber))" -ForegroundColor DarkGray
+  }
+  Write-Host ""
+  Write-Host "  Screenshot this window if you need help." -ForegroundColor Yellow
   Write-Host ""
   Read-Host "  Press Enter to close"
   exit 1
