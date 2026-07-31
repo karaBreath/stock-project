@@ -303,6 +303,82 @@ def test_install_bat_is_pure_ascii():
     assert not bad, f"install.bat มีอักขระที่ไม่ใช่ ASCII ที่บรรทัด {bad}"
 
 
+# ---------------------------------------------------------------------------
+# เปิดเองตอน logon — เลียนแบบ volume-edge ที่ผู้ใช้ใช้อยู่จริงแล้วบอกว่าง่ายกว่า
+# ---------------------------------------------------------------------------
+AUTOSTART_FILES = ("autostart-run.bat", "install_autostart.bat",
+                   "uninstall_autostart.bat", "run-hidden.vbs")
+
+
+def _read(name):
+    with open(os.path.join(BASE, name), encoding="ascii") as f:
+        return f.read()
+
+
+@pytest.mark.parametrize("name", AUTOSTART_FILES)
+def test_autostart_files_exist_and_are_ascii(name):
+    """
+    cmd อ่าน .bat และ cscript อ่าน .vbs ด้วย code page ของระบบ
+    ข้อความไทยในไฟล์พวกนี้จะเพี้ยนจนสั่งงานพลาด
+    """
+    path = os.path.join(BASE, name)
+    assert os.path.exists(path), f"ไม่มี {name}"
+    with open(path, "rb") as f:
+        raw = f.read()
+    bad = [i + 1 for i, ln in enumerate(raw.split(b"\n")) if any(b > 127 for b in ln)]
+    assert not bad, f"{name} มีอักขระที่ไม่ใช่ ASCII ที่บรรทัด {bad}"
+
+
+def test_autostart_runs_completely_hidden():
+    """
+    ถ้าไม่ซ่อนหน้าต่าง ทุกครั้งที่เปิดเครื่องจะมีหน้าต่างดำเด้งขึ้นมาค้างไว้
+    เลข 0 คือ hidden และ False คือไม่รอให้จบ ขาดตัวใดตัวหนึ่งก็เพี้ยน
+    """
+    vbs = _read("run-hidden.vbs")
+    assert ".Run" in vbs and "0, False" in vbs, "ต้องเปิดแบบซ่อนและไม่รอ"
+    assert "autostart-run.bat" in vbs
+    # volume-edge ฝังพาธ D:\cowork\... ไว้ตรง ๆ ย้ายโฟลเดอร์เมื่อไรก็พังเงียบ
+    assert "WScript.ScriptFullName" in vbs, "ต้องหาพาธจากตำแหน่งไฟล์เอง ไม่ใช่ฝังตายตัว"
+    assert ":\\" not in vbs, "ห้ามฝังพาธแบบตายตัว"
+
+
+def test_autostart_entry_never_pauses():
+    """
+    หน้าต่างถูกซ่อนอยู่ ไม่มีใครเห็นและไม่มีใครกดได้
+    ถ้ามี pause ระบบจะค้างรอปุ่มที่กดไม่ได้ = ไม่เปิดขึ้นเลยแบบไร้ร่องรอย
+    """
+    text = _read("autostart-run.bat")
+    # ตัดคอมเมนต์ออกก่อน คำว่า pause ในคำอธิบายไม่ได้ทำอะไร
+    code = [ln for ln in text.splitlines()
+            if ln.strip() and not ln.strip().lower().startswith("rem")]
+    assert not [ln for ln in code if "pause" in ln.lower()], \
+        "ห้ามมี pause ในตัวที่รันแบบซ่อน"
+    assert "--no-browser" in text, "เปิดเครื่องทีเบราว์เซอร์เด้งทุกครั้งไม่ไหว"
+
+
+def test_autostart_task_is_registered_at_logon():
+    """ต้องเป็น ONLOGON และไม่ต้องใช้สิทธิ admin ไม่งั้นดับเบิลคลิกแล้วไม่ผ่าน"""
+    for name in ("install_autostart.bat",):
+        text = _read(name)
+        assert "schtasks /Create" in text
+        assert "/SC ONLOGON" in text
+        assert "/RL LIMITED" in text, "ต้องไม่ต้องใช้สิทธิ admin"
+        assert "run-hidden.vbs" in text, "ต้องเรียกตัวที่ซ่อนหน้าต่าง"
+    assert "schtasks /Delete" in _read("uninstall_autostart.bat"), "ต้องถอนออกได้ด้วย"
+
+
+def test_setup_script_turns_on_autostart_itself(script):
+    """
+    ถ้าปล่อยให้ผู้ใช้ไปดับเบิลคลิก install_autostart.bat เองก็เท่ากับ
+    เพิ่มขั้นตอนกลับเข้าไปอีกขั้น ซึ่งเป็นสิ่งที่พยายามตัดออกอยู่พอดี
+    """
+    text = script.decode("ascii")
+    assert "schtasks /Create" in text
+    assert "TradeWorldNews" in text
+    assert "ONLOGON" in text
+    assert "run-hidden.vbs" in text
+
+
 def test_install_bat_pauses_so_errors_stay_readable():
     """เหตุผลเดียวที่ไฟล์นี้มีอยู่: หน้าต่างต้องไม่ปิดเองก่อนได้อ่าน"""
     with open(INSTALL_BAT, encoding="ascii") as f:
