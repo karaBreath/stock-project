@@ -241,7 +241,7 @@ $pyExe  = if ($py -is [array]) { $py[0] } else { $py }
 $pyArgs = if ($py -is [array] -and $py[1]) { @($py[1]) } else { @() }
 
 # --------------------------------------------------------------------------
-# 5) desktop icon + open the window
+# 5) desktop icon + start at logon + open the window
 # --------------------------------------------------------------------------
 Say "Creating the desktop icon..."
 try {
@@ -249,6 +249,29 @@ try {
 } catch {
   Say "Could not create the icon (not fatal): $($_.Exception.Message)"
 }
+
+# Register the logon task. This is the part that removes opening from the
+# routine entirely: the app is simply already running when the user logs in,
+# so the icon has nothing to launch -- it just shows the page. Hidden via
+# run-hidden.vbs, otherwise every boot would flash a black console window.
+#
+# /RL LIMITED needs no admin rights, so this works from a plain double-click.
+Say "Setting it to start by itself at logon..."
+$old = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'   # schtasks writes to stderr when it is fine
+try {
+  $vbs = Join-Path $root 'run-hidden.vbs'
+  & schtasks /Create /TN 'TradeWorldNews' /TR "wscript.exe `"$vbs`"" `
+      /SC ONLOGON /RL LIMITED /F | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    Say "Autostart is on -- from the next logon it is already running."
+  } else {
+    Say "Could not set up autostart (not fatal). Run install_autostart.bat later."
+  }
+} catch {
+  Say "Could not set up autostart (not fatal): $($_.Exception.Message)"
+}
+$ErrorActionPreference = $old
 
 Say "Opening the app window..."
 $pyw = Join-Path (Split-Path $pyExe) 'pythonw.exe'

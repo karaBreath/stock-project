@@ -15,6 +15,10 @@ on:
     paths:
       - "setup.ps1"
       - "install.bat"
+      - "autostart-run.bat"
+      - "install_autostart.bat"
+      - "uninstall_autostart.bat"
+      - "run-hidden.vbs"
       - "gui.py"
       - "gui.bat"
       - "services/desktop.py"
@@ -54,7 +58,9 @@ jobs:
       - name: "2) ไฟล์ .bat ต้องเป็น ASCII + CRLF (ข้อความไทยใน .bat ทำให้ cmd พัง)"
         shell: powershell
         run: |
-          foreach ($name in @('gui.bat', 'install.bat')) {
+          foreach ($name in @('gui.bat', 'install.bat', 'autostart-run.bat',
+                              'install_autostart.bat', 'uninstall_autostart.bat',
+                              'run-hidden.vbs')) {
             $path = Join-Path $PWD $name
             $bytes = [IO.File]::ReadAllBytes($path)
             if ($bytes | Where-Object { $_ -gt 127 }) { throw "$name contains non-ASCII bytes" }
@@ -119,6 +125,29 @@ jobs:
             throw "the one-liner has $($errors.Count) syntax error(s)"
           }
           Write-Host "  one-liner parses OK - $($tokens.Count) tokens"
+
+      # -------------------------------------------------------------------
+      # The whole point of autostart is that the user never opens anything
+      # again, so a task that fails to register is a silent regression back
+      # to the old routine. Register it for real here and read it back.
+      - name: "2c) ตั้งงานเปิดอัตโนมัติตอน logon ได้จริง"
+        shell: powershell
+        run: |
+          $vbs = Join-Path $PWD 'run-hidden.vbs'
+          schtasks /Create /TN 'TradeWorldNewsCI' /TR "wscript.exe `"$vbs`"" `
+            /SC ONLOGON /RL LIMITED /F | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "schtasks could not create the logon task" }
+
+          $q = schtasks /Query /TN 'TradeWorldNewsCI' /FO LIST /V
+          if ($LASTEXITCODE -ne 0) { throw "the task was not there after creating it" }
+          $q | Where-Object { $_ -match 'Task To Run|Schedule Type|Run As User' } |
+            ForEach-Object { Write-Host "  $($_.Trim())" }
+          if (($q -join ' ') -notlike '*run-hidden.vbs*') {
+            throw "the task does not point at run-hidden.vbs"
+          }
+
+          schtasks /Delete /TN 'TradeWorldNewsCI' /F | Out-Null
+          Write-Host "  logon task created, verified and cleaned up"
 
       # -------------------------------------------------------------------
       - name: "3) สร้างไอคอนบนหน้าจอจริง แล้วต้องมีไฟล์ .lnk โผล่จริง"
