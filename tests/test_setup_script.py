@@ -347,7 +347,8 @@ def test_install_bat_is_pure_ascii():
 # เปิดเองตอน logon — เลียนแบบ volume-edge ที่ผู้ใช้ใช้อยู่จริงแล้วบอกว่าง่ายกว่า
 # ---------------------------------------------------------------------------
 AUTOSTART_FILES = ("autostart-run.bat", "install_autostart.bat",
-                   "uninstall_autostart.bat", "run-hidden.vbs")
+                   "uninstall_autostart.bat", "run-hidden.vbs",
+                   "START-HERE.bat")
 
 
 def _read(name):
@@ -417,6 +418,48 @@ def test_setup_script_turns_on_autostart_itself(script):
     assert "TradeWorldNews" in text
     assert "ONLOGON" in text
     assert "run-hidden.vbs" in text
+
+
+# ---------------------------------------------------------------------------
+# START-HERE.bat — ทางที่ไม่ต้องโหลดอะไรตอนรัน (โค้ดมาพร้อม zip แล้ว)
+# ---------------------------------------------------------------------------
+def test_start_here_downloads_nothing_at_run_time():
+    """
+    ทุกทางที่ผ่านมาพังที่จุดเดียวกัน: PowerShell ต่อเน็ตตอนรัน แล้วโดน
+    แอนตี้ไวรัส/พร็อกซี/TLS ปฏิเสธเงียบ ๆ ทางนี้โค้ดอยู่ข้าง ๆ ไฟล์แล้ว
+    เพราะเบราว์เซอร์โหลด zip มาทั้งโฟลเดอร์ จึงไม่มีอะไรให้ปฏิเสธ
+    """
+    text = _read("START-HERE.bat")
+    for net in ("raw.githubusercontent", "codeload", "Invoke-WebRequest",
+                "Invoke-RestMethod", "DownloadString", "git clone"):
+        assert net not in text, f"ห้ามโหลดโค้ดตอนรัน — เจอ {net}"
+    # ยกเว้น Python เอง ที่ยังต้องลงถ้าเครื่องไม่มี แต่ winget เป็นส่วนหนึ่ง
+    # ของ Windows ไม่ได้ถูกมองว่าเป็น download cradle
+    assert "winget install" in text
+
+
+def test_start_here_does_everything_in_one_double_click():
+    """ถ้ายังต้องไปกดไฟล์อื่นต่อ ก็ไม่ได้แก้ปัญหาที่ผู้ใช้บอกว่าเปิดยาก"""
+    text = _read("START-HERE.bat")
+    assert "services\\desktop.py" in text, "ต้องสร้างไอคอนให้"
+    assert "schtasks /Create" in text and "ONLOGON" in text, "ต้องตั้งเปิดเองให้"
+    assert "launcher.py" in text, "ต้องเปิดโปรแกรมให้"
+    assert "nebula-log.txt" in text, "ต้องเขียน log ให้เอง"
+
+
+def test_start_here_redirects_before_the_command():
+    """
+    `echo %RC%>> file` เมื่อค่าลงท้ายด้วยตัวเลข cmd จะอ่านตัวเลขนั้นเป็น
+    หมายเลข handle แล้ว redirect ผิดที่ (เช่น `py -3>>` = stderr)
+    วาง redirect ไว้หน้าคำสั่งจึงปลอดภัยเสมอ
+    """
+    text = _read("START-HERE.bat")
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("REM") or not s:
+            continue
+        m = re.search(r"%>>?\s*\"%LOG%\"", s)
+        assert not m, f"redirect ต่อท้ายค่าที่อาจลงท้ายด้วยตัวเลข: {s}"
 
 
 def test_install_bat_pauses_so_errors_stay_readable():

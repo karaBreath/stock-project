@@ -15,6 +15,7 @@ on:
     paths:
       - "setup.ps1"
       - "install.bat"
+      - "START-HERE.bat"
       - "autostart-run.bat"
       - "install_autostart.bat"
       - "uninstall_autostart.bat"
@@ -60,7 +61,7 @@ jobs:
         run: |
           foreach ($name in @('gui.bat', 'install.bat', 'autostart-run.bat',
                               'install_autostart.bat', 'uninstall_autostart.bat',
-                              'run-hidden.vbs')) {
+                              'run-hidden.vbs', 'START-HERE.bat')) {
             $path = Join-Path $PWD $name
             $bytes = [IO.File]::ReadAllBytes($path)
             if ($bytes | Where-Object { $_ -gt 127 }) { throw "$name contains non-ASCII bytes" }
