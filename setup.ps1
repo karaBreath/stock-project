@@ -26,6 +26,13 @@ try {
     [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 } catch { }
 
+# Always write a log, without being asked. Asking a user to reproduce an error
+# and read it back is a step that fails far more often than it works -- the
+# window is gone by the time anyone thinks to look. A file that is simply
+# always there can be sent as-is.
+$LOG = Join-Path $env:USERPROFILE 'nebula-log.txt'
+try { Start-Transcript -Path $LOG -Force | Out-Null } catch { }
+
 function Say([string]$m) { Write-Host "  $m" }
 function Die([string]$m) {
   Write-Host ""
@@ -47,8 +54,11 @@ trap {
     Write-Host "      (line $($_.InvocationInfo.ScriptLineNumber))" -ForegroundColor DarkGray
   }
   Write-Host ""
-  Write-Host "  Screenshot this window if you need help." -ForegroundColor Yellow
+  Write-Host "  A full log was saved to:" -ForegroundColor Yellow
+  Write-Host "      $LOG" -ForegroundColor Yellow
+  Write-Host "  Send that file and the problem can be read off it directly." -ForegroundColor Yellow
   Write-Host ""
+  try { Stop-Transcript | Out-Null } catch { }
   Read-Host "  Press Enter to close"
   exit 1
 }
@@ -284,6 +294,7 @@ if ((Test-Path $pyw) -and $pyArgs.Count -eq 0) {
 
 Write-Host ""
 Write-Host "  Done. The app window is opening." -ForegroundColor Green
-Write-Host "  Next time: just double-click the desktop icon." -ForegroundColor Green
+Write-Host "  Next time: it is already running when you log in." -ForegroundColor Green
 Write-Host ""
+try { Stop-Transcript | Out-Null } catch { }
 Start-Sleep -Seconds 4

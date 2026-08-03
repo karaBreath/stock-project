@@ -3,10 +3,12 @@ REM NEBULA / Trade World News - one-click installer.
 REM
 REM Double-click this file. Nothing to type, nothing to paste.
 REM
-REM This exists because the Run-box one-liner has three ways to fail silently:
-REM a curly quote pasted from a chat app, TLS 1.2 not being on by default in
-REM Windows PowerShell 5.1, and the window closing before any error is
-REM readable. A .bat that pauses at the end has none of those problems.
+REM Why this downloads to a file first instead of piping the script straight
+REM into PowerShell: "irm <url> | iex" runs a script that never touches disk,
+REM which is exactly the shape of a malware download cradle. Antivirus and
+REM Defender heuristics block that pattern on sight, and the block surfaces as
+REM a plain error with no hint that AV was involved at all. Saving the file and
+REM running it as a file looks like what it is, and goes through.
 REM
 REM ASCII only on purpose - the legacy console font has no Thai glyphs, so
 REM Thai text here would render as empty boxes and look like a crash.
@@ -21,15 +23,33 @@ echo   Downloading the installer...
 echo.
 
 set "URL=https://raw.githubusercontent.com/karaBreath/stock-project/main/setup.ps1"
+set "PS1=%TEMP%\nebula-setup.ps1"
+set "LOG=%USERPROFILE%\nebula-log.txt"
 
-REM One physical line on purpose: a trailing space after a ^ continuation is
-REM invisible and silently breaks the command.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}; try { $s = (New-Object Net.WebClient).DownloadString($env:URL) } catch { Write-Host ''; Write-Host ('  [X] Could not download the installer: ' + $_.Exception.Message) -ForegroundColor Red; Write-Host '      Check your internet connection, then try again.' -ForegroundColor Yellow; exit 1 }; Invoke-Expression $s"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}; try { Invoke-WebRequest -Uri $env:URL -OutFile $env:PS1 -UseBasicParsing } catch { Write-Host ''; Write-Host ('  [X] Could not download the installer: ' + $_.Exception.Message) -ForegroundColor Red; exit 1 }"
+
+if errorlevel 1 (
+  echo.
+  echo   Check your internet connection, then try again.
+  echo.
+  pause
+  exit /b 1
+)
+
+REM A file downloaded from the internet carries a "mark of the web" tag.
+REM Without clearing it, PowerShell can refuse to run the file with a warning
+REM that reads like a virus alert.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Unblock-File -Path $env:PS1 } catch {}"
+
+echo   Running the installer...
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
 
 if errorlevel 1 (
   echo.
   echo   [!] Setup did not finish.
-  echo       Screenshot this window if you need help.
+  echo       A log was saved to: %LOG%
+  echo       Send that file and the problem can be read off it directly.
   echo.
 )
 

@@ -262,6 +262,46 @@ def test_one_line_command_forces_tls12_and_shows_errors():
     assert "Read-Host" in line, "ต้องค้างหน้าต่างไว้ให้ผู้ใช้อ่าน error"
 
 
+def test_one_line_command_does_not_use_a_download_cradle():
+    """
+    เกิดขึ้นจริงกับผู้ใช้: วางแล้ว error ทั้งที่เน็ตปกติ
+
+    `irm <url> | iex` รันสคริปต์โดยไม่แตะดิสก์เลย ซึ่งเป็นรูปแบบเดียวกับ
+    ที่มัลแวร์ใช้โหลดตัวเองเข้ามา แอนตี้ไวรัสกับ Defender จึงบล็อกทิ้ง
+    และสิ่งที่ผู้ใช้เห็นคือ error ธรรมดาที่ไม่บอกเลยว่าโดน AV บล็อก
+    ต้องโหลดลงไฟล์ก่อนแล้วค่อยรันไฟล์นั้น
+    """
+    line = _one_liner()
+    assert line, "คู่มือต้องมีคำสั่งบรรทัดเดียว"
+    assert "-OutFile" in line, "ต้องโหลดลงไฟล์ก่อน"
+    for cradle in ("| iex", "|iex", "iex(irm", "Invoke-Expression"):
+        assert cradle not in line, f"ห้ามใช้ท่า {cradle} — AV บล็อก"
+
+
+def test_setup_script_always_writes_a_log(script):
+    """
+    การขอให้ผู้ใช้ทำซ้ำแล้วอ่าน error กลับมาให้ ล้มเหลวบ่อยกว่าสำเร็จ
+    เพราะกว่าจะนึกได้ว่าต้องอ่าน หน้าต่างก็ปิดไปแล้ว
+    ไฟล์ที่มีอยู่เสมอส่งต่อได้เลยโดยไม่ต้องทำอะไรเพิ่ม
+    """
+    text = script.decode("ascii")
+    assert "Start-Transcript" in text, "ต้องเขียน log ให้เองทุกครั้ง"
+    assert "nebula-log.txt" in text
+    assert "Stop-Transcript" in text, "ต้องปิด transcript ไม่งั้นไฟล์ไม่ถูกเขียนจนจบ"
+
+
+def test_install_bat_does_not_use_a_download_cradle():
+    """เหตุผลเดียวกับบรรทัดเดียว — ไฟล์นี้ก็ต้องโหลดลงดิสก์ก่อนรัน"""
+    with open(INSTALL_BAT, encoding="ascii") as f:
+        text = f.read()
+    assert "-OutFile" in text, "ต้องโหลดลงไฟล์ก่อน"
+    assert "DownloadString" not in text, "DownloadString คือท่าที่ AV บล็อก"
+    assert "-File " in text, "ต้องรันเป็นไฟล์ ไม่ใช่ส่งข้อความเข้า PowerShell"
+    # ไฟล์ที่โหลดจากเน็ตติดป้าย mark-of-the-web ถ้าไม่ปลดจะขึ้นเตือนแบบที่
+    # อ่านแล้วเหมือนโดนไวรัส ทั้งที่เป็นไฟล์ของเราเอง
+    assert "Unblock-File" in text, "ต้องปลด mark-of-the-web ก่อนรัน"
+
+
 def test_one_line_command_fits_the_windows_run_box():
     """
     ช่อง Windows + R รับได้ 259 ตัวอักษร เกินกว่านั้นจะถูกตัดท้ายทิ้งเงียบ ๆ
